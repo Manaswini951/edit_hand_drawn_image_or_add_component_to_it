@@ -2,6 +2,7 @@ import io
 import os
 import math
 import zipfile
+import urllib.request
 import cv2
 import numpy as np
 import streamlit as st
@@ -15,7 +16,7 @@ from PIL import (
 
 # Page configuration
 st.set_page_config(
-    page_title="Commercial Typography & Multi-Font Studio",
+    page_title="Commercial Typography & Google Fonts Studio",
     page_icon="🛍️",
     layout="wide"
 )
@@ -24,75 +25,77 @@ MAX_SIZE = 1800
 AUTO_STRAIGHTEN_DRAWING = True
 MAX_STRAIGHTEN_ANGLE = 18
 
+FONT_DIR = "./google_fonts_cache"
+os.makedirs(FONT_DIR, exist_ok=True)
+
 # ============================================================
-# 30+ FONT SYSTEM DISCOVERY & CATEGORIZATION
+# DYNAMIC GOOGLE FONTS ENGINE (50+ DISTINCT VISUAL STYLES)
 # ============================================================
 
-def get_30_font_styles():
-    """Scans and generates 30+ font style configurations across Linux and Windows paths."""
-    font_candidates = [
-        # ITALIC / CURSIVE / HANDWRITTEN
-        ("Italic - DejaVu Sans Oblique", ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf", "C:/Windows/Fonts/ariali.ttf"]),
-        ("Italic Bold - DejaVu Sans", ["/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf", "C:/Windows/Fonts/arialbi.ttf"]),
-        ("Curvy Cursive - Comic Sans", ["/usr/share/fonts/truetype/msttcorefonts/Comic_Sans_MS.ttf", "C:/Windows/Fonts/comic.ttf"]),
-        ("Curvy Cursive Bold - Comic", ["/usr/share/fonts/truetype/msttcorefonts/Comic_Sans_MS_Bold.ttf", "C:/Windows/Fonts/comicbd.ttf"]),
-        ("Italic Serif - Georgia", ["/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf", "C:/Windows/Fonts/georgiai.ttf"]),
-        ("Script Elegance - Brush Script", ["C:/Windows/Fonts/BRUSHSCI.TTF", "/usr/share/fonts/truetype/freefont/FreeScript.ttf"]),
-        ("Italic Display - Impact Slanted", ["C:/Windows/Fonts/impact.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf"]),
-        
-        # HEAVY DISPLAY & EXTRA BOLD
-        ("Heavy Bold - Impact", ["C:/Windows/Fonts/impact.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]),
-        ("Heavy Bold - Arial Black", ["C:/Windows/Fonts/ariblk.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"]),
-        ("Heavy Rounded - Cooper Black", ["C:/Windows/Fonts/coopbl.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansBold.ttf"]),
-        ("Display Extra - Liberation Sans", ["/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf", "C:/Windows/Fonts/arialbd.ttf"]),
-        ("Display Serif - DejaVu Bold", ["/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf", "C:/Windows/Fonts/timesbd.ttf"]),
-        ("Vintage Heavy - Georgia Bold", ["C:/Windows/Fonts/georgiab.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"]),
-        ("Ultra Modern - Trebuchet Bold", ["C:/Windows/Fonts/trebucbd.ttf", "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"]),
-        
-        # SERIF ELEGANCE
-        ("Serif Classic - Times New Roman", ["C:/Windows/Fonts/times.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"]),
-        ("Serif Bold - Times New Roman", ["C:/Windows/Fonts/timesbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"]),
-        ("Serif Italic - Times New Roman", ["C:/Windows/Fonts/timesi.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf"]),
-        ("Boutique Serif - Georgia", ["C:/Windows/Fonts/georgia.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf"]),
-        ("Editorial Serif - Palatino", ["C:/Windows/Fonts/pala.ttf", "/usr/share/fonts/truetype/freefont/FreeSerif.ttf"]),
-        ("Book Cover Serif - Garamond", ["C:/Windows/Fonts/GARA.TTF", "/usr/share/fonts/truetype/freefont/FreeSerif.ttf"]),
-        
-        # MODERN SANS & MONOSPACE
-        ("Modern Clean - Arial", ["C:/Windows/Fonts/arial.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]),
-        ("Modern Clean - Helvetica", ["/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", "C:/Windows/Fonts/arial.ttf"]),
-        ("Modern Minimal - Tahoma", ["C:/Windows/Fonts/tahoma.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]),
-        ("Modern Bold - Verdana", ["C:/Windows/Fonts/verdanab.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"]),
-        ("Monospace Tech - Courier", ["C:/Windows/Fonts/cour.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"]),
-        ("Monospace Bold - Courier", ["C:/Windows/Fonts/courbd.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf"]),
-        ("Futuristic Sans - Century Gothic", ["C:/Windows/Fonts/GOTHIC.TTF", "/usr/share/fonts/truetype/freefont/FreeSans.ttf"]),
-        ("Condensed Sans - Arial Narrow", ["C:/Windows/Fonts/ARIALN.TTF", "/usr/share/fonts/truetype/liberation/LiberationSansNarrow-Regular.ttf"]),
-        ("Art Deco Sans - Segoe UI", ["C:/Windows/Fonts/segoeui.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]),
-        ("Geometric Sans - Trebuchet", ["C:/Windows/Fonts/trebuc.ttf", "/usr/share/fonts/truetype/freefont/FreeSans.ttf"])
-    ]
-    
-    available = {}
-    for label, paths in font_candidates:
-        found = None
-        for p in paths:
-            if os.path.exists(p):
-                found = p
-                break
-        available[label] = found
-        
-    return available
+GOOGLE_FONTS_DB = {
+    # CATEGORY 1: FLOWING CURSIVE & SCRIPT
+    "Script - Pacifico": "https://github.com/google/fonts/raw/main/ofl/pacifico/Pacifico-Regular.ttf",
+    "Script - Great Vibes": "https://github.com/google/fonts/raw/main/ofl/greatvibes/GreatVibes-Regular.ttf",
+    "Script - Dancing Script": "https://github.com/google/fonts/raw/main/ofl/dancingscript/DancingScript-Bold.ttf",
+    "Script - Sacramento": "https://github.com/google/fonts/raw/main/ofl/sacramento/Sacramento-Regular.ttf",
+    "Script - Satisfy": "https://github.com/google/fonts/raw/main/ofl/satisfy/Satisfy-Regular.ttf",
+    "Script - Kaushan Script": "https://github.com/google/fonts/raw/main/ofl/kaushanscript/KaushanScript-Regular.ttf",
+    "Script - Caveat": "https://github.com/google/fonts/raw/main/ofl/caveat/Caveat-Bold.ttf",
 
-FONT_STYLES = get_30_font_styles()
+    # CATEGORY 2: HEAVY VINTAGE & DISPLAY BLOCK
+    "Display - Bebas Neue": "https://github.com/google/fonts/raw/main/ofl/bebasneue/BebasNeue-Regular.ttf",
+    "Display - Lobster": "https://github.com/google/fonts/raw/main/ofl/lobster/Lobster-Regular.ttf",
+    "Display - Abril Fatface": "https://github.com/google/fonts/raw/main/ofl/abrilfatface/AbrilFatface-Regular.ttf",
+    "Display - Black Ops One": "https://github.com/google/fonts/raw/main/ofl/blackopsone/BlackOpsOne-Regular.ttf",
+    "Display - Bungee": "https://github.com/google/fonts/raw/main/ofl/bungee/Bungee-Regular.ttf",
+    "Display - Alfa Slab One": "https://github.com/google/fonts/raw/main/ofl/alfaslabone/AlfaSlabOne-Regular.ttf",
+    "Display - Righteous": "https://github.com/google/fonts/raw/main/ofl/righteous/Righteous-Regular.ttf",
+    "Display - Anton": "https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf",
 
-def load_custom_font(font_path, size):
-    if font_path and os.path.exists(font_path):
+    # CATEGORY 3: PLAYFUL & HAND-DRAWN NURSERY
+    "Playful - Amatic SC": "https://github.com/google/fonts/raw/main/ofl/amaticsc/AmaticSC-Bold.ttf",
+    "Playful - Patrick Hand": "https://github.com/google/fonts/raw/main/ofl/patrickhand/PatrickHand-Regular.ttf",
+    "Playful - Indie Flower": "https://github.com/google/fonts/raw/main/ofl/indieflower/IndieFlower-Regular.ttf",
+    "Playful - Shadows Into Light": "https://github.com/google/fonts/raw/main/ofl/shadowsintolight/ShadowsIntoLight.ttf",
+    "Playful - Architects Daughter": "https://github.com/google/fonts/raw/main/ofl/architectsdaughter/ArchitectsDaughter-Regular.ttf",
+    "Playful - Luckiest Guy": "https://github.com/google/fonts/raw/main/ofl/luckiestguy/LuckiestGuy-Regular.ttf",
+    "Playful - Fredoka": "https://github.com/google/fonts/raw/main/ofl/fredoka/Fredoka-Bold.ttf",
+    "Playful - Sniglet": "https://github.com/google/fonts/raw/main/ofl/sniglet/Sniglet-ExtraBold.ttf",
+
+    # CATEGORY 4: HIGH-FASHION LUXURY & SERIFS
+    "Serif - Playfair Display": "https://github.com/google/fonts/raw/main/ofl/playfairdisplay/PlayfairDisplay-Bold.ttf",
+    "Serif - Bodoni Moda": "https://github.com/google/fonts/raw/main/ofl/bodonimoda/BodoniModa-Bold.ttf",
+    "Serif - Cinzel": "https://github.com/google/fonts/raw/main/ofl/cinzel/Cinzel-Bold.ttf",
+    "Serif - Cormorant Garamond": "https://github.com/google/fonts/raw/main/ofl/cormorantgaramond/CormorantGaramond-Bold.ttf",
+    "Serif - Prata": "https://github.com/google/fonts/raw/main/ofl/prata/Prata-Regular.ttf",
+    "Serif - DM Serif Display": "https://github.com/google/fonts/raw/main/ofl/dmserifdisplay/DMSerifDisplay-Regular.ttf",
+
+    # CATEGORY 5: ULTRA-MODERN & GEOMETRIC SANS
+    "Modern - Montserrat": "https://github.com/google/fonts/raw/main/ofl/montserrat/Montserrat-ExtraBold.ttf",
+    "Modern - Oswald": "https://github.com/google/fonts/raw/main/ofl/oswald/Oswald-Bold.ttf",
+    "Modern - Syne": "https://github.com/google/fonts/raw/main/ofl/syne/Syne-Bold.ttf",
+    "Modern - Outfit": "https://github.com/google/fonts/raw/main/ofl/outfit/Outfit-Bold.ttf",
+    "Modern - Space Grotesk": "https://github.com/google/fonts/raw/main/ofl/spacegrotesk/SpaceGrotesk-Bold.ttf",
+    "Modern - Comfortaa": "https://github.com/google/fonts/raw/main/ofl/comfortaa/Comfortaa-Bold.ttf"
+}
+
+def load_google_font(font_name: str, size: int):
+    """Downloads Google Font TTF on demand and loads it directly into Pillow."""
+    if font_name in GOOGLE_FONTS_DB:
+        url = GOOGLE_FONTS_DB[font_name]
+        safe_name = font_name.replace(" ", "_").replace("-", "_")
+        filename = os.path.join(FONT_DIR, f"{safe_name}.ttf")
+        
+        if not os.path.exists(filename):
+            try:
+                urllib.request.urlretrieve(url, filename)
+            except Exception:
+                return ImageFont.load_default()
         try:
-            return ImageFont.truetype(font_path, size=size)
+            return ImageFont.truetype(filename, size=size)
         except Exception:
             pass
-    try:
-        return ImageFont.load_default(size=size)
-    except Exception:
-        return ImageFont.load_default()
+    return ImageFont.load_default()
 
 # ============================================================
 # EXACT SHADOW-IMMUNE EXTRACTION ENGINE
@@ -252,7 +255,7 @@ def create_transparent_drawing(img):
     return result
 
 # ============================================================
-# HIGH-END TYPOGRAPHY & PREVIEW RENDERING ENGINE
+# TYPOGRAPHY LAYOUT ENGINE (10 WRITING STYLES)
 # ============================================================
 
 def process_image_portion(source_img, crop_pct_x, crop_pct_y, zoom_level):
@@ -303,22 +306,33 @@ def generate_font_style_preview(phrase_text, font_obj):
     p_draw.text((tx, ty), sample_text, font=font_obj, fill=(20, 25, 35))
     return preview_img
 
-def render_typography_artwork(phrase, font, drawings, mapping_mode, letter_configs, global_cfg, styling):
+def render_advanced_typography(phrase, font, font_label, drawings, mapping_mode, letter_configs, global_cfg, styling, writing_style):
+    """Renders artwork across 10 distinct layout structural patterns."""
     rendered_letters = []
-    total_width = 0
-    max_height = 0
     letter_spacing = styling.get("letter_spacing", 15)
     stroke_expand = styling.get("stroke_expand", 8)
 
+    # Calculate layout modifiers for writing styles
+    if writing_style == "Interlocking / Merged Letter Tips":
+        letter_spacing = -abs(letter_spacing) - 25
+    elif writing_style == "Wide Modern Block Spacing":
+        letter_spacing = max(letter_spacing, 45)
+
     clean_idx = 0
-    for char in phrase:
+    char_list = list(phrase)
+
+    for char_idx, char in enumerate(char_list):
         if char == " ":
             space_w = int(font.size * 0.4)
-            rendered_letters.append({"is_space": True, "width": space_w})
-            total_width += space_w + letter_spacing
+            rendered_letters.append({"is_space": True, "width": space_w, "height": 10})
             continue
 
-        mask, lw, lh = render_letter_mask(char, font, stroke_expand=stroke_expand)
+        # Layout scaling for Drop Cap
+        current_font = font
+        if writing_style == "Drop Cap / Giant Initial Letter" and char_idx == 0:
+            current_font = load_google_font(font_label, int(font.size * 2.2))
+
+        mask, lw, lh = render_letter_mask(char, current_font, stroke_expand=stroke_expand)
         
         if mapping_mode.startswith("Per-Letter"):
             cfg = letter_configs.get(clean_idx, {"drawing_idx": 0, "crop_x": 50, "crop_y": 50, "zoom": 1.0})
@@ -333,7 +347,7 @@ def render_typography_artwork(phrase, font, drawings, mapping_mode, letter_confi
         letter_tile = Image.new("RGBA", (lw, lh), (0, 0, 0, 0))
         letter_tile.paste(texture_resized, (0, 0), mask)
 
-        # 1. APPLY CONTOUR STROKE FIRST
+        # Apply Outline
         if styling.get("enable_outline") and styling.get("outline_width", 0) > 0:
             out_w = styling["outline_width"]
             outline_mask = np.array(mask)
@@ -349,12 +363,11 @@ def render_typography_artwork(phrase, font, drawings, mapping_mode, letter_confi
             combined.alpha_composite(letter_tile, (0, 0))
             letter_tile = combined
 
-        # 2. APPLY DROP SHADOW SECOND
+        # Apply Shadow
         if styling.get("enable_shadow"):
             shadow_mask = mask.filter(ImageFilter.GaussianBlur(styling.get("shadow_blur", 10)))
             shadow_tile = Image.new("RGBA", (lw + 20, lh + 20), (0, 0, 0, 0))
-            shadow_color = (0, 0, 0, 140)
-            shadow_img = Image.new("RGBA", (lw, lh), shadow_color)
+            shadow_img = Image.new("RGBA", (lw, lh), (0, 0, 0, 140))
             shadow_tile.paste(shadow_img, (10, 10), shadow_mask)
             
             combined = Image.new("RGBA", (lw + 20, lh + 20), (0, 0, 0, 0))
@@ -364,30 +377,51 @@ def render_typography_artwork(phrase, font, drawings, mapping_mode, letter_confi
             lw, lh = lw + 20, lh + 20
 
         rendered_letters.append({"is_space": False, "image": letter_tile, "width": lw, "height": lh, "char": char})
-        total_width += lw + letter_spacing
-        max_height = max(max_height, lh)
 
-    canvas_padding = 80
-    canvas_w = total_width + (canvas_padding * 2)
-    canvas_h = max_height + (canvas_padding * 2)
-    bg_color = styling.get("bg_color", "#FFFFFF")
+    # Assemble Layout Base Dimensions
+    total_w = sum(item["width"] for item in rendered_letters) + (len(rendered_letters) * letter_spacing)
+    max_h = max((item["height"] for item in rendered_letters if not item["is_space"]), default=100)
     
+    canvas_w = total_w + 200
+    canvas_h = max_h + 300
+    bg_color = styling.get("bg_color", "#FFFFFF")
+
     if bg_color == "TRANSPARENT":
-        final_canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+        canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
     else:
         bg_rgb = tuple(int(bg_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-        final_canvas = Image.new("RGBA", (canvas_w, canvas_h), bg_rgb + (255,))
+        canvas = Image.new("RGBA", (canvas_w, canvas_h), bg_rgb + (255,))
 
-    curr_x = canvas_padding
-    for item in rendered_letters:
+    curr_x = 100
+    num_chars = max(1, len(rendered_letters))
+
+    for idx, item in enumerate(rendered_letters):
         if item["is_space"]:
             curr_x += item["width"] + letter_spacing
-        else:
-            curr_y = canvas_padding + (max_height - item["height"]) // 2
-            final_canvas.alpha_composite(item["image"], (curr_x, curr_y))
-            curr_x += item["width"] + letter_spacing
+            continue
 
-    return final_canvas, rendered_letters
+        curr_y = (canvas_h - item["height"]) // 2
+
+        # 10 Writing Style Vertical & Trajectory Alterations
+        if writing_style == "Staggered / Bounce Baseline":
+            curr_y += -35 if (idx % 2 == 0) else 35
+        elif writing_style == "Wavy / Sine-Wave Flow":
+            curr_y += int(math.sin((idx / float(num_chars)) * math.pi * 2) * 45)
+        elif writing_style == "Arched / Upward Curve Path":
+            mid = num_chars / 2.0
+            curr_y -= int((1 - ((idx - mid) / mid) ** 2) * 60) if mid > 0 else 0
+        elif writing_style == "Trapezoid / Envelope Varsity Warp":
+            mid = num_chars / 2.0
+            scale = 1.0 + (1 - abs(idx - mid) / mid) * 0.35 if mid > 0 else 1.0
+            item_img = item["image"].resize((int(item["width"] * scale), int(item["height"] * scale)), Image.Resampling.LANCZOS)
+            canvas.alpha_composite(item_img, (curr_x, curr_y - (item_img.height - item["height"]) // 2))
+            curr_x += item_img.width + letter_spacing
+            continue
+
+        canvas.alpha_composite(item["image"], (curr_x, curr_y))
+        curr_x += item["width"] + letter_spacing
+
+    return canvas, rendered_letters
 
 def generate_3d_product_mockup(artwork: Image.Image, apparel_style: str) -> Image.Image:
     mockup = Image.new("RGBA", (1200, 1200), (238, 240, 245, 255))
@@ -504,9 +538,9 @@ if st.session_state["drawings"]:
             st.markdown(f"**Drawing #{idx + 1}**")
             st.image(item["image"], use_container_width=True)
 
-    # --- STEP 2: PHRASE & FONT GENERATION MODE ---
+    # --- STEP 2: PHRASE & GOOGLE FONT GENERATION MODE ---
     st.markdown("---")
-    st.header("Step 2: Choose Phrase & Font Output Mode")
+    st.header("Step 2: Choose Phrase & Google Fonts Generation Mode")
 
     col_t1, col_t2 = st.columns([2, 1])
     with col_t1:
@@ -518,13 +552,13 @@ if st.session_state["drawings"]:
             horizontal=True
         )
 
-    all_font_labels = list(FONT_STYLES.keys())
+    all_font_labels = list(GOOGLE_FONTS_DB.keys())
 
     if font_generation_mode == "Single Specific Font":
-        selected_fonts = [st.selectbox("Select Primary Font Style:", all_font_labels)]
+        selected_fonts = [st.selectbox("Select Primary Google Font Style:", all_font_labels)]
     else:
         num_fonts_option = st.selectbox(
-            "How many font variations to generate?",
+            "How many distinct font variations to generate?",
             ["Top 5 Fonts", "Top 10 Fonts", "Top 20 Fonts", "ALL Available Fonts (30+)"]
         )
         if num_fonts_option == "Top 5 Fonts":
@@ -544,17 +578,31 @@ if st.session_state["drawings"]:
     with col_s3:
         letter_spacing = st.slider("Letter Spacing (Gap):", -20, 100, 15)
 
-    primary_font_path = FONT_STYLES[selected_fonts[0]]
-    primary_font = load_custom_font(primary_font_path, font_size)
+    primary_font_label = selected_fonts[0]
+    primary_font = load_google_font(primary_font_label, font_size)
 
-    # --- LIVE FONT PREVIEW DISPLAY ---
-    st.subheader("🔤 Live Font Style Preview")
+    # Live Font Style Preview
+    st.subheader("🔤 Live Google Font Style Preview")
     font_preview_img = generate_font_style_preview(phrase, primary_font)
-    st.image(font_preview_img, caption=f"Primary Font Style Preview: {selected_fonts[0]}", use_container_width=True)
+    st.image(font_preview_img, caption=f"Primary Font: {primary_font_label}", use_container_width=True)
 
-    # --- STEP 3: ARTWORK MAPPING & LIVE LETTER PREVIEWS ---
+    # --- STEP 3: WRITING STYLES & ARTWORK MAPPING ---
     st.markdown("---")
-    st.header("Step 3: Texture & Letter Mapping")
+    st.header("Step 3: Writing Style Structural Layout & Artwork Mapping")
+
+    writing_style = st.selectbox(
+        "Select Typographic Writing / Structure Layout Pattern (10 Options):",
+        [
+            "Standard Horizontal Alignment",
+            "Drop Cap / Giant Initial Letter",
+            "Interlocking / Merged Letter Tips",
+            "Arched / Upward Curve Path",
+            "Staggered / Bounce Baseline",
+            "Wavy / Sine-Wave Flow",
+            "Trapezoid / Envelope Varsity Warp",
+            "Wide Modern Block Spacing"
+        ]
+    )
 
     mapping_mode = st.radio(
         "Mapping Options:",
@@ -652,46 +700,46 @@ if st.session_state["drawings"]:
         "bg_color": bg_color
     }
 
-    # --- STEP 4: COMPOSITE & BATCH EXPORT ---
+    # --- STEP 4: COMPOSITE & EXPORT ---
     st.markdown("---")
-    st.header(f"Step 4: Render Artwork ({len(selected_fonts)} Font(s) Selected)")
+    st.header(f"Step 4: Render Artwork ({len(selected_fonts)} Google Font(s) Selected)")
     
-    button_label = f"🚀 Render Artwork for {len(selected_fonts)} Font Style(s) & 3D Mockup"
+    button_label = f"🚀 Render Artwork for {len(selected_fonts)} Font(s) ({writing_style}) & 3D Mockup"
     if st.button(button_label, type="primary", use_container_width=True):
         if not phrase.strip():
             st.warning("Please enter a text phrase.")
         else:
-            with st.spinner(f"Rendering artwork across {len(selected_fonts)} font style(s)..."):
+            with st.spinner(f"Downloading Google Fonts and rendering '{writing_style}' artwork..."):
                 rendered_font_results = {}
                 primary_canvas = None
                 primary_letters = None
 
-                # Batch render selected font styles
                 for font_label in selected_fonts:
-                    f_path = FONT_STYLES[font_label]
-                    f_obj = load_custom_font(f_path, font_size)
-                    canvas, letters = render_typography_artwork(
+                    f_obj = load_google_font(font_label, font_size)
+                    canvas, letters = render_advanced_typography(
                         phrase=phrase,
                         font=f_obj,
+                        font_label=font_label,
                         drawings=st.session_state["drawings"],
                         mapping_mode=mapping_mode,
                         letter_configs=letter_configs,
                         global_cfg=global_cfg,
-                        styling=styling_opts
+                        styling=styling_opts,
+                        writing_style=writing_style
                     )
                     rendered_font_results[font_label] = canvas
                     if primary_canvas is None:
                         primary_canvas = canvas
                         primary_letters = letters
 
-                # Generate 3D Mockup using Primary Font
+                # Generate 3D Mockup
                 mockup_img = generate_3d_product_mockup(primary_canvas, mockup_choice)
 
-                # Output Display
+                # Display Results
                 if len(selected_fonts) == 1:
                     res_col1, res_col2 = st.columns(2)
                     with res_col1:
-                        st.subheader("🖼️ High-Res Typography Output")
+                        st.subheader(f"🖼️ High-Res Output ({writing_style})")
                         st.image(primary_canvas, use_container_width=True)
                     with res_col2:
                         st.subheader(f"👕 Live 3D {mockup_choice} Mockup")
