@@ -7,7 +7,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 # Page configuration
 st.set_page_config(
-    page_title="Custom Typed Lettering & Artwork Studio",
+    page_title="Solid Typed Artwork Studio",
     page_icon="🎨",
     layout="wide"
 )
@@ -15,31 +15,26 @@ st.set_page_config(
 MAX_SIZE = 1800
 
 # ============================================================
-# SOLID TYPED FONT ENGINE
+# RELIABLE BOLD FONT ENGINE
 # ============================================================
 
 FONT_OPTIONS = {
-    "Heavy Display (Impact)": [
+    "Heavy Impact Block": [
         "C:/Windows/Fonts/impact.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
     ],
-    "Classic Sans (Arial Bold)": [
+    "Classic Sans Bold": [
         "C:/Windows/Fonts/arialbd.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
     ],
-    "Serif Bold (Georgia/DejaVu)": [
+    "Serif Bold": [
         "C:/Windows/Fonts/georgiab.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
-    ],
-    "Playful Comic": [
-        "C:/Windows/Fonts/comicbd.ttf",
-        "/usr/share/fonts/truetype/msttcorefonts/Comic_Sans_MS.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
     ]
 }
 
-def load_selected_font(font_choice, size):
+def load_bold_font(font_choice, size):
     paths = FONT_OPTIONS.get(font_choice, [])
     for p in paths:
         if os.path.exists(p):
@@ -50,7 +45,7 @@ def load_selected_font(font_choice, size):
     return ImageFont.load_default()
 
 # ============================================================
-# EXTRACTION & TYPED MASK ENGINE
+# SOLID TYPED MASK COMPOSITOR
 # ============================================================
 
 def resize_image(img, max_size=MAX_SIZE):
@@ -61,39 +56,58 @@ def resize_image(img, max_size=MAX_SIZE):
     new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
     return img.resize(new_size, Image.Resampling.LANCZOS)
 
-def extract_sketch_frame_mask(gray_img):
-    """Isolates the hand-drawn outer frame and accent flourishes from Slot 2."""
+def extract_outer_box_frame_only(gray_img):
+    """Isolates ONLY long outer frame lines while filtering out hand-drawn letter strokes inside."""
     blurred = cv2.GaussianBlur(gray_img, (5, 5), 0)
     thresh = cv2.adaptiveThreshold(
         blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV, 21, 12
     )
-    # Filter small noise particles
+    
+    # Filter for large continuous stroke areas (outer box lines)
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(thresh, connectivity=8)
-    clean_mask = np.zeros_like(thresh)
+    frame_mask = np.zeros_like(thresh)
+    
+    h, w = gray_img.shape
     for label in range(1, num_labels):
-        if stats[label, cv2.CC_STAT_AREA] >= 50:
-            clean_mask[labels == label] = 255
-    return clean_mask
+        area = stats[label, cv2.CC_STAT_AREA]
+        # Only keep large frame components (> 250px area)
+        if area >= 250:
+            frame_mask[labels == label] = 255
+            
+    return frame_mask
 
-def render_solid_typed_letters_mask(
-    canvas_w, canvas_h, lines, font_choice, font_size, line_spacing, text_angle
-):
-    """Renders 100% solid, crisp typed letters into an alpha mask."""
+def create_solid_typed_typography_mask(canvas_w, canvas_h, lines, font_choice, text_scale_pct, text_angle):
+    """Creates a 100% solid, thick pixel mask for typed letters."""
     mask_img = Image.new("L", (canvas_w, canvas_h), 0)
     draw = ImageDraw.Draw(mask_img)
-    font_obj = load_selected_font(font_choice, font_size)
 
-    # Filter empty lines
     active_lines = [l.strip() for l in lines if l.strip()]
     if not active_lines:
         return np.array(mask_img)
 
-    # Calculate line heights
-    line_bboxes = [draw.textbbox((0, 0), line, font=font_obj) for line in active_lines]
-    line_heights = [b[3] - b[1] for b in line_bboxes]
-    total_text_height = sum(line_heights) + (len(active_lines) - 1) * line_spacing
+    # Automatically scale font size relative to canvas width
+    target_width = int(canvas_w * (text_scale_pct / 100.0))
+    
+    # Find font size where the longest line fits target_width
+    font_size = 40
+    test_font = load_bold_font(font_choice, font_size)
+    longest_line = max(active_lines, key=len)
+    
+    bbox = draw.textbbox((0, 0), longest_line, font=test_font)
+    text_w = bbox[2] - bbox[0]
+    
+    if text_w > 0:
+        font_size = int((target_width / float(text_w)) * font_size)
+        
+    font_obj = load_bold_font(font_choice, font_size)
 
+    # Render lines vertically stacked
+    line_bboxes = [draw.textbbox((0, 0), line, font=font_obj) for line in active_lines]
+    line_heights = [max(20, b[3] - b[1]) for b in line_bboxes]
+    line_spacing = int(font_size * 0.25)
+    
+    total_text_height = sum(line_heights) + (len(active_lines) - 1) * line_spacing
     start_y = (canvas_h - total_text_height) // 2
 
     for idx, line in enumerate(active_lines):
@@ -105,18 +119,14 @@ def render_solid_typed_letters_mask(
         draw.text((tx, ty), line, font=font_obj, fill=255)
         start_y += line_heights[idx] + line_spacing
 
-    # Rotate typed text if sketch layout is tilted
+    # Apply layout rotation angle
     if text_angle != 0:
         mask_img = mask_img.rotate(text_angle, resample=Image.Resampling.BICUBIC, expand=False)
 
     return np.array(mask_img)
 
-# ============================================================
-# COMPOSITING ENGINE
-# ============================================================
-
 def composite_artwork_into_typed_design(
-    artwork_img, text_style_img, lines, font_choice, font_size, line_spacing, text_angle, include_frame
+    artwork_img, text_style_img, lines, font_choice, text_scale_pct, text_angle, include_frame
 ):
     art_rgb = artwork_img.convert("RGB")
     style_rgb = text_style_img.convert("RGB")
@@ -125,28 +135,27 @@ def composite_artwork_into_typed_design(
     w, h = style_rgb.size
     art_rgb = art_rgb.resize((w, h), Image.Resampling.LANCZOS)
     
-    # Generate solid typed text mask
-    typed_mask = render_solid_typed_letters_mask(
+    # 1. Create solid typed letters mask
+    typed_mask = create_solid_typed_typography_mask(
         canvas_w=w,
         canvas_h=h,
         lines=lines,
         font_choice=font_choice,
-        font_size=font_size,
-        line_spacing=line_spacing,
+        text_scale_pct=text_scale_pct,
         text_angle=text_angle
     )
 
-    # Merge drawn outer frame if enabled
+    # 2. Merge outer sketch frame if enabled
     if include_frame:
         gray = cv2.cvtColor(np.array(style_rgb), cv2.COLOR_RGB2GRAY)
-        frame_mask = extract_sketch_frame_mask(gray)
+        frame_mask = extract_outer_box_frame_only(gray)
         final_mask = cv2.bitwise_or(typed_mask, frame_mask)
     else:
         final_mask = typed_mask
 
     final_mask = cv2.GaussianBlur(final_mask, (3, 3), 0)
 
-    # Clip Artwork into solid mask
+    # 3. Clip Artwork into solid mask
     art_arr = np.array(art_rgb)
     rgba_arr = np.dstack((art_arr, final_mask))
     composited = Image.fromarray(rgba_arr, "RGBA")
@@ -192,8 +201,8 @@ def generate_3d_product_mockup(artwork: Image.Image, apparel_style: str) -> Imag
 # STREAMLIT INTERFACE
 # ============================================================
 
-st.title("🎨 Custom Typed Lettering & Artwork Studio")
-st.write("Convert hand-drawn layouts into **solid typed letters** filled completely with your artwork pattern!")
+st.title("🎨 Solid Typed Artwork Studio")
+st.write("Convert hand-drawn layout sketches into **bold, fully filled typed letters** using your artwork pattern!")
 
 col_upload1, col_upload2 = st.columns(2)
 
@@ -210,7 +219,7 @@ with col_upload1:
         st.image(img1, caption="Uploaded Artwork Pattern", use_container_width=True)
 
 with col_upload2:
-    st.header("Slot 2: Text Layout & Frame Sketch")
+    st.header("Slot 2: Text Layout Sketch")
     style_file = st.file_uploader(
         "Upload Hand-Drawn Layout Sketch photo (JPG, PNG):",
         type=["jpg", "jpeg", "png", "webp"],
@@ -236,7 +245,7 @@ col_opt1, col_opt2, col_opt3, col_opt4 = st.columns(4)
 with col_opt1:
     font_choice = st.selectbox("Typed Font Style:", list(FONT_OPTIONS.keys()))
 with col_opt2:
-    font_size = st.slider("Font Size:", 60, 240, 140)
+    text_scale_pct = st.slider("Text Width Scale (% of image):", 30, 90, 65)
 with col_opt3:
     text_angle = st.slider("Text Tilt Angle (°):", -45, 45, 12)
 with col_opt4:
@@ -248,7 +257,7 @@ if st.button("🚀 Render Solid Typed Artwork Design", type="primary", use_conta
     if not art_file or not style_file:
         st.warning("Please upload BOTH Slot 1 (Artwork) and Slot 2 (Sketch Layout) images.")
     else:
-        with st.spinner("Rendering solid typed typography and filling with artwork..."):
+        with st.spinner("Generating solid typed letters and filling with artwork..."):
             art_img = Image.open(art_file)
             art_img = ImageOps.exif_transpose(art_img)
             
@@ -260,8 +269,7 @@ if st.button("🚀 Render Solid Typed Artwork Design", type="primary", use_conta
                 text_style_img=style_img,
                 lines=[line1, line2, line3],
                 font_choice=font_choice,
-                font_size=font_size,
-                line_spacing=20,
+                text_scale_pct=text_scale_pct,
                 text_angle=text_angle,
                 include_frame=include_frame
             )
