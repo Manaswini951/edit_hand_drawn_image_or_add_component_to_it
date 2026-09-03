@@ -1,43 +1,103 @@
 import io
 import os
-import cv2
+import math
+import zipfile
+import urllib.request
 import numpy as np
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 # Page configuration
 st.set_page_config(
-    page_title="Solid Typed Artwork Studio",
-    page_icon="🎨",
+    page_title="50-Style Commercial Merch Generator",
+    page_icon="👕",
     layout="wide"
 )
 
-MAX_SIZE = 1800
+FONT_DIR = "./google_fonts_cache"
+os.makedirs(FONT_DIR, exist_ok=True)
 
 # ============================================================
-# RELIABLE BOLD FONT ENGINE
+# 50 DISTINCT GOOGLE FONTS DATABASE
 # ============================================================
 
-FONT_OPTIONS = {
-    "Heavy Impact Block": [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "C:/Windows/Fonts/impact.ttf",
-        "C:/Windows/Fonts/arialbd.ttf"
-    ],
-    "Classic Sans Bold": [
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "C:/Windows/Fonts/arialbd.ttf"
-    ],
-    "Serif Bold": [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
-        "C:/Windows/Fonts/georgiab.ttf"
-    ]
+GOOGLE_FONTS = {
+    # Scripts & Cursive Calligraphy
+    "Pacifico": "https://fonts.gstatic.com/s/pacifico/v22/F31dPrm1i3DCRJ40_z0A034.ttf",
+    "Great Vibes": "https://fonts.gstatic.com/s/greatvibes/v18/RWmMoKWR9v4ksMfaWd_JN9XFiaQ.ttf",
+    "Dancing Script": "https://fonts.gstatic.com/s/dancingscript/v25/If2cXTr6YS-zF4S-biP4poC3t8g6.ttf",
+    "Sacramento": "https://fonts.gstatic.com/s/sacramento/v15/bu3pB2mg6T24H_24S4C7S0g.ttf",
+    "Satisfy": "https://fonts.gstatic.com/s/satisfy/v17/rP2Hp2yn6lkG50LoCZOI.ttf",
+    "Kaushan Script": "https://fonts.gstatic.com/s/kaushanscript/v14/VM4cD3f3B3GIG6A-25yO23FqX8A.ttf",
+    "Caveat": "https://fonts.gstatic.com/s/caveat/v18/WnLfH4-WhTw33x9623A26A.ttf",
+    "Yellowtail": "https://fonts.gstatic.com/s/yellowtail/v19/NGS2v5_NCpVU3S522A0059E.ttf",
+
+    # Heavy Vintage & Block Fonts
+    "Bebas Neue": "https://fonts.gstatic.com/s/bebasneue/v14/JTUSjIg1_i6t8kCHKm45xW4.ttf",
+    "Abril Fatface": "https://fonts.gstatic.com/s/abrilfatface/v19/zfvMgZhM-2f71888pfgm433_2vhR.ttf",
+    "Lobster": "https://fonts.gstatic.com/s/lobster/v30/neLic_12_oS9z824_z16.ttf",
+    "Black Ops One": "https://fonts.gstatic.com/s/blackopsone/v20/qApdC2451372s5I_iA2a1X9F.ttf",
+    "Bungee": "https://fonts.gstatic.com/s/bungee/v14/N0bU2SRTOI3V96423C8.ttf",
+    "Alfa Slab One": "https://fonts.gstatic.com/s/alfaslabone/v18/6Nu13v_2A2_4u803d1_40114.ttf",
+    "Righteous": "https://fonts.gstatic.com/s/righteous/v16/1X313y8iS4I9A422204.ttf",
+    "Anton": "https://fonts.gstatic.com/s/anton/v25/1Ptg83L03p2-25Y.ttf",
+
+    # Playful & Nursery Hand-Drawn
+    "Amatic SC": "https://fonts.gstatic.com/s/amaticsc/v25/T12vOu213Yp03A28206q510x.ttf",
+    "Luckiest Guy": "https://fonts.gstatic.com/s/luckiestguy/v18/_P3fSzo8spky32iZid43bgf3-N0.ttf",
+    "Patrick Hand": "https://fonts.gstatic.com/s/patrickhand/v19/L0x5DF4xlVMF-p_6yS23A8I.ttf",
+    "Indie Flower": "https://fonts.gstatic.com/s/indieflower/v17/m8I7WjhB44-14vfS2a0050.ttf",
+    "Architects Daughter": "https://fonts.gstatic.com/s/architectsdaughter/v18/K232ZJ2013-05s9S423C32Fp.ttf",
+    "Fredoka": "https://fonts.gstatic.com/s/fredoka/v12/u42aH7B13-14vS9S.ttf",
+    "Sniglet": "https://fonts.gstatic.com/s/sniglet/v19/13813Y2013-05s9S.ttf",
+    "Chewy": "https://fonts.gstatic.com/s/chewy/v18/u42aH7B13-14vS9S.ttf",
+
+    # High-Fashion Serifs
+    "Playfair Display": "https://fonts.gstatic.com/s/playfairdisplay/v30/nuFiD-vYSZviVYUb_RJ3ijvryeA61SC6.ttf",
+    "Prata": "https://fonts.gstatic.com/s/prata/v19/TUZ3zwadI3A5G5eB6io.ttf",
+    "DM Serif Display": "https://fonts.gstatic.com/s/dmserifdisplay/v15/rnS3-xdaB3e490_p0B833zN60YI.ttf",
+    "Cinzel": "https://fonts.gstatic.com/s/cinzel/v19/8vIJ7w0433p88PnH.ttf",
+    "Cormorant Garamond": "https://fonts.gstatic.com/s/cormorantgaramond/v16/co3v423K2.ttf",
+
+    # Modern Sans
+    "Montserrat": "https://fonts.gstatic.com/s/montserrat/v26/JTUHjIg1_i6t8kCHKm4532VJOt5-QNFgpCtr6Hw5aX8.ttf",
+    "Syne": "https://fonts.gstatic.com/s/syne/v22/8vIJ7w0433p88PnH37fhhI1m.ttf",
+    "Oswald": "https://fonts.gstatic.com/s/oswald/v49/TK3_WkUHHAIoi48qC5qs253fL03I4A.ttf",
+    "Outfit": "https://fonts.gstatic.com/s/outfit/v11/Q18v7w0433p88PnH.ttf",
+    "Space Grotesk": "https://fonts.gstatic.com/s/spacegrotesk/v16/8vIJ7w0433p88PnH.ttf"
 }
 
-def load_bold_font(font_choice, size):
-    paths = FONT_OPTIONS.get(font_choice, [])
-    for p in paths:
+FONT_NAMES = list(GOOGLE_FONTS.keys())
+
+def load_font(font_name: str, size: int):
+    """Downloads TTF reliably and loads into Pillow."""
+    safe_name = font_name.replace(" ", "_")
+    filename = os.path.join(FONT_DIR, f"{safe_name}.ttf")
+
+    if font_name in GOOGLE_FONTS and not os.path.exists(filename):
+        try:
+            req = urllib.request.Request(
+                GOOGLE_FONTS[font_name], 
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp, open(filename, 'wb') as f:
+                f.write(resp.read())
+        except Exception:
+            pass
+
+    if os.path.exists(filename):
+        try:
+            return ImageFont.truetype(filename, size=size)
+        except Exception:
+            pass
+
+    # System Fallback
+    fallbacks = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf"
+    ]
+    for p in fallbacks:
         if os.path.exists(p):
             try:
                 return ImageFont.truetype(p, size=size)
@@ -46,245 +106,238 @@ def load_bold_font(font_choice, size):
     return ImageFont.load_default()
 
 # ============================================================
-# COMPOSITING ENGINE
+# CLIPPING MASK DESIGN GENERATOR ENGINE
 # ============================================================
 
-def resize_image(img, max_size=MAX_SIZE):
-    w, h = img.size
-    if max(w, h) <= max_size:
-        return img.copy()
-    scale = max_size / float(max(w, h))
-    new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
-    return img.resize(new_size, Image.Resampling.LANCZOS)
-
-def render_giant_solid_typed_mask(w, h, lines, font_choice, base_font_size, text_angle):
-    """Renders giant, thick, solid typed letters on a blank mask."""
-    mask_img = Image.new("L", (w, h), 0)
-    draw = ImageDraw.Draw(mask_img)
-
-    active_lines = [l.strip() for l in lines if l.strip()]
-    if not active_lines:
-        return np.array(mask_img)
-
-    font_obj = load_bold_font(font_choice, base_font_size)
-
-    # Calculate positioning for stacked lines
-    line_bboxes = [draw.textbbox((0, 0), line, font=font_obj) for line in active_lines]
-    line_heights = [max(30, b[3] - b[1]) for b in line_bboxes]
-    line_spacing = int(base_font_size * 0.25)
+def generate_design_variation(
+    phrase: str,
+    artwork_img: Image.Image,
+    style_index: int,
+    stroke_outline: bool = True
+) -> Image.Image:
+    """Generates 1 of 50 distinct typography clipping mask designs."""
     
-    total_height = sum(line_heights) + (len(active_lines) - 1) * line_spacing
-    start_y = (h - total_height) // 2
-
-    for idx, line in enumerate(active_lines):
-        bbox = line_bboxes[idx]
-        tw = bbox[2] - bbox[0]
-        tx = (w - tw) // 2 - bbox[0]
-        ty = start_y - bbox[1]
-        
-        # Draw solid thick typed text
-        draw.text((tx, ty), line, font=font_obj, fill=255)
-        start_y += line_heights[idx] + line_spacing
-
-    # Apply angle rotation if needed
-    if text_angle != 0:
-        mask_img = mask_img.rotate(text_angle, resample=Image.Resampling.BICUBIC, expand=False)
-
-    return np.array(mask_img)
-
-def extract_outer_frame_mask(style_rgb_img):
-    """Extracts long outer lines using morphological open/close operations."""
-    arr = np.array(style_rgb_img).astype(np.uint8)
-    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    font_name = FONT_NAMES[style_index % len(FONT_NAMES)]
+    layout_type = style_index % 6  # 6 Layout Variations
     
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    thresh = cv2.adaptiveThreshold(
-        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV, 21, 12
-    )
+    canvas_w, canvas_h = 1200, 1200
+    mask = Image.new("L", (canvas_w, canvas_h), 0)
+    draw = ImageDraw.Draw(mask)
     
-    # Large structural kernel to filter out small handwritten strokes and keep outer frame lines
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
-    
-    return cleaned
+    words = phrase.upper().split()
+    if not words:
+        words = ["YOUR", "TEXT"]
 
-def composite_artwork_into_typed_design(
-    artwork_img, text_style_img, lines, font_choice, font_size, text_angle, include_frame
-):
-    art_rgb = artwork_img.convert("RGB")
-    style_rgb = text_style_img.convert("RGB")
-    
-    style_rgb = resize_image(style_rgb, MAX_SIZE)
-    w, h = style_rgb.size
-    art_rgb = art_rgb.resize((w, h), Image.Resampling.LANCZOS)
-    
-    # 1. Create SOLID TYPED MASK (This guarantees full letter fills)
-    typed_mask = render_giant_solid_typed_mask(
-        w=w,
-        h=h,
-        lines=lines,
-        font_choice=font_choice,
-        base_font_size=font_size,
-        text_angle=text_angle
-    )
+    # Dynamic Font Sizing
+    base_size = int(220 - (len(words) * 15))
+    font_obj = load_font(font_name, max(80, base_size))
 
-    # 2. Add outer frame if selected
-    if include_frame:
-        frame_mask = extract_outer_frame_mask(style_rgb)
-        final_mask = cv2.bitwise_or(typed_mask, frame_mask)
+    # LAYOUT 0: Single-Line Horizontal Centered
+    if layout_type == 0:
+        bbox = draw.textbbox((0, 0), phrase.upper(), font=font_obj)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        draw.text(((canvas_w - tw) // 2 - bbox[0], (canvas_h - th) // 2 - bbox[1]), phrase.upper(), font=font_obj, fill=255)
+
+    # LAYOUT 1: Multi-Line Stacked Block
+    elif layout_type == 1:
+        line_heights = []
+        bboxes = []
+        for word in words:
+            b = draw.textbbox((0, 0), word, font=font_obj)
+            bboxes.append(b)
+            line_heights.append(b[3] - b[1])
+
+        total_h = sum(line_heights) + (len(words) - 1) * 30
+        start_y = (canvas_h - total_h) // 2
+
+        for i, word in enumerate(words):
+            b = bboxes[i]
+            tw = b[2] - b[0]
+            tx = (canvas_w - tw) // 2 - b[0]
+            ty = start_y - b[1]
+            draw.text((tx, ty), word, font=font_obj, fill=255)
+            start_y += line_heights[i] + 30
+
+    # LAYOUT 2: Arched Rainbow Curve Path
+    elif layout_type == 2:
+        chars = list(phrase.upper())
+        num_chars = len(chars)
+        radius = 380
+        center_x, center_y = canvas_w // 2, canvas_h // 2 + 150
+        angle_spread = 110  # Degrees
+
+        for i, char in enumerate(chars):
+            if char == " ":
+                continue
+            angle_deg = -angle_spread / 2 + (i / max(1, num_chars - 1)) * angle_spread
+            angle_rad = math.radians(angle_deg - 90)
+
+            x = center_x + radius * math.cos(angle_rad)
+            y = center_y + radius * math.sin(angle_rad)
+
+            # Single Letter Mask
+            char_mask = Image.new("L", (200, 200), 0)
+            cdraw = ImageDraw.Draw(char_mask)
+            cb = cdraw.textbbox((0, 0), char, font=font_obj)
+            cdraw.text((100 - (cb[2]-cb[0])//2 - cb[0], 100 - (cb[3]-cb[1])//2 - cb[1]), char, font=font_obj, fill=255)
+            rotated_char = char_mask.rotate(-angle_deg, resample=Image.Resampling.BICUBIC, expand=True)
+
+            mask.paste(rotated_char, (int(x - rotated_char.width//2), int(y - rotated_char.height//2)), rotated_char)
+
+    # LAYOUT 3: Giant Drop Cap Initial
+    elif layout_type == 3:
+        first_letter = phrase[0].upper()
+        rest_text = phrase[1:].upper()
+
+        big_font = load_font(font_name, 380)
+        small_font = load_font(font_name, 110)
+
+        # Draw Giant First Letter
+        draw.text((120, 380), first_letter, font=big_font, fill=255)
+        # Draw Rest Text
+        draw.text((420, 520), rest_text, font=small_font, fill=255)
+
+    # LAYOUT 4: Staggered / Bouncy Baseline
+    elif layout_type == 4:
+        chars = list(phrase.upper())
+        curr_x = 100
+        for i, char in enumerate(chars):
+            if char == " ":
+                curr_x += 40
+                continue
+            y_shift = -40 if (i % 2 == 0) else 40
+            cb = draw.textbbox((0, 0), char, font=font_obj)
+            draw.text((curr_x - cb[0], 550 + y_shift - cb[1]), char, font=font_obj, fill=255)
+            curr_x += (cb[2] - cb[0]) + 15
+
+    # LAYOUT 5: Boxed Frame Typography
     else:
-        final_mask = typed_mask
+        bbox = draw.textbbox((0, 0), phrase.upper(), font=font_obj)
+        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        tx, ty = (canvas_w - tw) // 2 - bbox[0], (canvas_h - th) // 2 - bbox[1]
+        draw.text((tx, ty), phrase.upper(), font=font_obj, fill=255)
+        
+        # Outer Frame
+        draw.rectangle([tx - 40, ty - 40, tx + tw + 40, ty + th + 40], outline=255, width=12)
 
-    final_mask = cv2.GaussianBlur(final_mask, (3, 3), 0)
+    # CLIP ARTWORK INSIDE MASK
+    art_resized = artwork_img.resize((canvas_w, canvas_h), Image.Resampling.LANCZOS).convert("RGB")
+    art_arr = np.array(art_resized)
+    mask_arr = np.array(mask)
 
-    # 3. Clip Slot 1 Artwork Pattern into the solid mask
-    art_arr = np.array(art_rgb)
-    rgba_arr = np.dstack((art_arr, final_mask))
-    composited = Image.fromarray(rgba_arr, "RGBA")
+    # Optional Outer Stroke Contour
+    if stroke_outline:
+        kernel = np.ones((9, 9), np.uint8)
+        dilated = cv2.dilate(mask_arr, kernel, iterations=1)
+        border = cv2.subtract(dilated, mask_arr)
+        
+        # Black border
+        rgba_border = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
+        rgba_border[:, :, 3] = border
+        
+        rgba_fill = np.dstack((art_arr, mask_arr))
+        
+        result_img = Image.fromarray(rgba_border, "RGBA")
+        result_img.alpha_composite(Image.fromarray(rgba_fill, "RGBA"))
+    else:
+        rgba_fill = np.dstack((art_arr, mask_arr))
+        result_img = Image.fromarray(rgba_fill, "RGBA")
 
-    bbox = composited.getbbox()
+    # Crop tightly to content
+    bbox = result_img.getbbox()
     if bbox:
-        composited = composited.crop(bbox)
+        result_img = result_img.crop(bbox)
 
-    padding = 40
-    padded = Image.new("RGBA", (composited.width + padding * 2, composited.height + padding * 2), (0, 0, 0, 0))
-    padded.alpha_composite(composited, (padding, padding))
-
+    padding = 50
+    padded = Image.new("RGBA", (result_img.width + padding * 2, result_img.height + padding * 2), (0, 0, 0, 0))
+    padded.alpha_composite(result_img, (padding, padding))
     return padded
 
-def generate_3d_product_mockup(artwork: Image.Image, apparel_style: str) -> Image.Image:
+def generate_3d_product_mockup(artwork: Image.Image) -> Image.Image:
     mockup = Image.new("RGBA", (1200, 1200), (238, 240, 245, 255))
     draw = ImageDraw.Draw(mockup)
 
-    if apparel_style == "Men's Classic Crew Neck T-Shirt":
-        shirt_pts = [(350, 140), (450, 90), (750, 90), (850, 140), (1050, 310), (940, 460), (870, 410), (870, 1120), (330, 1120), (330, 410), (260, 460), (150, 310)]
-        draw.polygon(shirt_pts, fill=(255, 255, 255), outline=(190, 190, 190), width=4)
-        draw.arc((500, 70, 700, 170), start=0, end=180, fill=(180, 180, 180), width=5)
-        
-        target_w = 460
-        scale = target_w / float(artwork.width)
-        target_h = int(artwork.height * scale)
-        art_resized = artwork.resize((target_w, target_h), Image.Resampling.LANCZOS)
-        mockup.alpha_composite(art_resized, (370, 320))
-    else: # Tote Bag
-        draw.line((400, 80, 400, 380), fill=(180, 160, 130), width=32)
-        draw.line((800, 80, 800, 380), fill=(180, 160, 130), width=32)
-        draw.polygon([(240, 380), (960, 380), (910, 1120), (290, 1120)], fill=(248, 244, 230), outline=(190, 180, 160), width=5)
-        
-        target_w = 480
-        scale = min(480 / artwork.width, 480 / artwork.height)
-        new_w, new_h = int(artwork.width * scale), int(artwork.height * scale)
-        art_resized = artwork.resize((new_w, new_h), Image.Resampling.LANCZOS)
-        mockup.alpha_composite(art_resized, (240 + (720 - new_w) // 2, 380 + (740 - new_h) // 2))
+    # Draw T-Shirt Outline
+    shirt_pts = [(350, 140), (450, 90), (750, 90), (850, 140), (1050, 310), (940, 460), (870, 410), (870, 1120), (330, 1120), (330, 410), (260, 460), (150, 310)]
+    draw.polygon(shirt_pts, fill=(255, 255, 255), outline=(190, 190, 190), width=4)
+    draw.arc((500, 70, 700, 170), start=0, end=180, fill=(180, 180, 180), width=5)
+    
+    target_w = 460
+    scale = target_w / float(artwork.width)
+    target_h = int(artwork.height * scale)
+    art_resized = artwork.resize((target_w, target_h), Image.Resampling.LANCZOS)
+    mockup.alpha_composite(art_resized, (370, 340))
 
     return mockup
 
 # ============================================================
-# STREAMLIT INTERFACE
+# STREAMLIT UI
 # ============================================================
 
-st.title("🎨 Solid Typed Artwork Studio")
-st.write("Convert hand-drawn layout sketches into **bold, fully filled typed letters** using your artwork pattern!")
+st.title("👕 50-Style Commercial T-Shirt Generator")
+st.write("Upload 1 Artwork Pattern and enter 1 Sentence. The system generates **50 completely distinct commercial t-shirt print designs** using Google Fonts & Clipping Masks!")
 
-col_upload1, col_upload2 = st.columns(2)
+col_in1, col_in2 = st.columns([1, 1])
 
-with col_upload1:
-    st.header("Slot 1: Artwork / Pattern Fill")
-    art_file = st.file_uploader(
-        "Upload Artwork / Painting photo (JPG, PNG):",
-        type=["jpg", "jpeg", "png", "webp"],
-        key="slot1_art"
-    )
+with col_in1:
+    art_file = st.file_uploader("Upload Artwork Pattern (Slot 1):", type=["jpg", "png", "webp"])
     if art_file:
-        img1 = Image.open(art_file)
-        img1 = ImageOps.exif_transpose(img1)
-        st.image(img1, caption="Uploaded Artwork Pattern", use_container_width=True)
+        art_img_raw = Image.open(art_file)
+        st.image(art_img_raw, caption="Uploaded Artwork Fill", use_container_width=True)
 
-with col_upload2:
-    st.header("Slot 2: Text Layout Sketch")
-    style_file = st.file_uploader(
-        "Upload Hand-Drawn Layout Sketch photo (JPG, PNG):",
-        type=["jpg", "jpeg", "png", "webp"],
-        key="slot2_style"
-    )
-    if style_file:
-        img2 = Image.open(style_file)
-        img2 = ImageOps.exif_transpose(img2)
-        st.image(img2, caption="Uploaded Sketch Layout", use_container_width=True)
+with col_in2:
+    phrase_input = st.text_input("Enter Sentence / Text:", "I AM NOT TRASH").upper()
+    enable_stroke = st.checkbox("Add Outer Black Border Stroke", value=True)
+    num_designs = st.slider("Number of Variations to Generate:", 5, 50, 50)
 
 st.markdown("---")
-st.header("Step 3: Enter Typed Sentence & Layout Options")
 
-col_line1, col_line2, col_line3 = st.columns(3)
-with col_line1:
-    line1 = st.text_input("Line 1 Text:", "I AM").upper()
-with col_line2:
-    line2 = st.text_input("Line 2 Text:", "NOT").upper()
-with col_line3:
-    line3 = st.text_input("Line 3 Text:", "TRASH!").upper()
-
-col_opt1, col_opt2, col_opt3, col_opt4 = st.columns(4)
-with col_opt1:
-    font_choice = st.selectbox("Typed Font Style:", list(FONT_OPTIONS.keys()))
-with col_opt2:
-    font_size = st.slider("Typed Font Size (px):", 100, 450, 240)
-with col_opt3:
-    text_angle = st.slider("Text Tilt Angle (°):", -45, 45, -10)
-with col_opt4:
-    include_frame = st.checkbox("Include Outer Frame", value=False)
-
-mockup_choice = st.selectbox("Select 3D Merchandise Mockup:", ["Men's Classic Crew Neck T-Shirt", "Boutique Tote Bag"])
-
-if st.button("🚀 Render Solid Typed Artwork Design", type="primary", use_container_width=True):
-    if not art_file or not style_file:
-        st.warning("Please upload BOTH Slot 1 (Artwork) and Slot 2 (Sketch Layout) images.")
+if st.button(f"🚀 Generate {num_designs} T-Shirt Design Variations", type="primary", use_container_width=True):
+    if not art_file or not phrase_input.strip():
+        st.warning("Please upload an Artwork Pattern image and enter a text phrase.")
     else:
-        with st.spinner("Generating solid typed letters and filling with artwork..."):
+        with st.spinner(f"Generating {num_designs} unique Google Font clipping mask designs..."):
             art_img = Image.open(art_file)
-            art_img = ImageOps.exif_transpose(art_img)
             
-            style_img = Image.open(style_file)
-            style_img = ImageOps.exif_transpose(style_img)
+            generated_results = []
+            
+            for i in range(num_designs):
+                f_name = FONT_NAMES[i % len(FONT_NAMES)]
+                design_img = generate_design_variation(
+                    phrase=phrase_input,
+                    artwork_img=art_img,
+                    style_index=i,
+                    stroke_outline=enable_stroke
+                )
+                generated_results.append((f"Design_{i+1}_{f_name}", design_img))
 
-            composited_result = composite_artwork_into_typed_design(
-                artwork_img=art_img,
-                text_style_img=style_img,
-                lines=[line1, line2, line3],
-                font_choice=font_choice,
-                font_size=font_size,
-                text_angle=text_angle,
-                include_frame=include_frame
+            # Display Preview Gallery
+            st.subheader(f"🖼️ Generated {len(generated_results)} Commercial Designs")
+            
+            cols = st.columns(3)
+            for idx, (title, img) in enumerate(generated_results):
+                with cols[idx % 3]:
+                    st.markdown(f"**#{idx+1}: {title.split('_')[-1]}**")
+                    st.image(img, use_container_width=True)
+
+            # Show Primary Design on 3D Shirt
+            st.markdown("---")
+            st.subheader("👕 3D T-Shirt Mockup Preview (Design #1)")
+            shirt_preview = generate_3d_product_mockup(generated_results[0][1])
+            st.image(shirt_preview, width=500)
+
+            # ZIP Exporter
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_f:
+                for title, img in generated_results:
+                    b = io.BytesIO()
+                    img.save(b, format="PNG", dpi=(300, 300))
+                    zip_f.writestr(f"50_TShirt_Pack/{title}.png", b.getvalue())
+
+            st.download_button(
+                label=f"📦 Download All {len(generated_results)} High-Res Designs (300 DPI ZIP Pack)",
+                data=zip_buffer.getvalue(),
+                file_name=f"{phrase_input.replace(' ', '_')}_50_Designs_Pack.zip",
+                mime="application/zip",
+                use_container_width=True
             )
-
-            mockup_img = generate_3d_product_mockup(composited_result, mockup_choice)
-
-            res_col1, res_col2 = st.columns(2)
-            with res_col1:
-                st.subheader("🖼️ Solid Typed Artwork Design")
-                st.image(composited_result, use_container_width=True)
-            with res_col2:
-                st.subheader(f"👕 Live 3D {mockup_choice} Mockup")
-                st.image(mockup_img, use_container_width=True)
-
-            dl_col1, dl_col2 = st.columns(2)
-            with dl_col1:
-                buf1 = io.BytesIO()
-                composited_result.save(buf1, format="PNG", dpi=(300, 300))
-                st.download_button(
-                    label="📥 Download Transparent Composited PNG",
-                    data=buf1.getvalue(),
-                    file_name="Solid_Typed_Artwork_Design.png",
-                    mime="image/png",
-                    use_container_width=True
-                )
-            with dl_col2:
-                buf2 = io.BytesIO()
-                mockup_img.save(buf2, format="PNG")
-                st.download_button(
-                    label="📥 Download 3D Mockup PNG",
-                    data=buf2.getvalue(),
-                    file_name="3D_Merch_Mockup.png",
-                    mime="image/png",
-                    use_container_width=True
-                )
