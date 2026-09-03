@@ -2,4 +2,3 @@ streamlit
 Pillow
 opencv-python-headless
 numpy
-easyocr
