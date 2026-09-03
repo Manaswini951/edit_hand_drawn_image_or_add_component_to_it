@@ -15,7 +15,7 @@ st.set_page_config(
 MAX_SIZE = 1800
 
 # ============================================================
-# SHADOW-IMMUNE EXTRACTION ENGINE (Extracts Hand-Drawn Mask)
+# ACCURATE INK EXTRACTION ENGINE (Fixes Noise/Speckling)
 # ============================================================
 
 def resize_image(img, max_size=MAX_SIZE):
@@ -26,51 +26,43 @@ def resize_image(img, max_size=MAX_SIZE):
     new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
     return img.resize(new_size, Image.Resampling.LANCZOS)
 
-def remove_small_components(mask, min_area=18):
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
-        mask, connectivity=8
-    )
-    if num_labels <= 1:
-        return mask
-    cleaned = np.zeros_like(mask)
-    for label in range(1, num_labels):
-        area = stats[label, cv2.CC_STAT_AREA]
-        if area >= min_area:
-            cleaned[labels == label] = 255
-    return cleaned
-
-def extract_handwritten_mask(img_rgb):
-    """Extracts black ink strokes from paper into an alpha mask."""
+def clean_paper_shadows_and_extract_mask(img_rgb):
+    """
+    Extracts black ink strokes cleanly from paper photos while completely 
+    erasing background paper texture and lighting shadows.
+    """
     arr = np.array(img_rgb).astype(np.uint8)
     h, w = arr.shape[:2]
 
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
     
-    # Gaussian thresholding to isolate ink on paper
-    bg_size = max(61, int(min(h, w) * 0.10))
-    if bg_size % 2 == 0:
-        bg_size += 1
+    # Smooth paper noise
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    
+    # Adaptive thresholding specifically targets crisp ink strokes vs paper
+    thresh = cv2.adaptiveThreshold(
+        blurred,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        21,  # Block size
+        12   # C constant to filter out faint paper shadows
+    )
+    
+    # Remove isolated speckles/noise dots
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(thresh, connectivity=8)
+    mask = np.zeros_like(thresh)
+    
+    min_stroke_area = 30  # Eliminates small paper dots
+    for label in range(1, num_labels):
+        if stats[label, cv2.CC_STAT_AREA] >= min_stroke_area:
+            mask[labels == label] = 255
 
-    bg_gray = cv2.GaussianBlur(gray, (bg_size, bg_size), 0)
-    local_darkness = bg_gray.astype(np.float32) - gray.astype(np.float32)
+    # Connect slightly broken pen strokes
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     
-    # Stroke mask
-    mask = np.where(local_darkness > 15.0, 255, 0).astype(np.uint8)
-    
-    # Additional edge detection for thin strokes
-    grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-    magnitude = cv2.magnitude(grad_x, grad_y)
-    edge_mask = np.where(magnitude > 25.0, 255, 0).astype(np.uint8)
-
-    combined_mask = cv2.bitwise_or(mask, edge_mask)
-    
-    # Morphological cleaning
-    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    cleaned_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, close_kernel)
-    cleaned_mask = remove_small_components(cleaned_mask, min_area=25)
-    
-    return cleaned_mask
+    return mask
 
 # ============================================================
 # COMPOSITING ENGINE: ARTWORK FILLED INTO TEXT STROKES
@@ -82,13 +74,13 @@ def composite_artwork_into_text_style(artwork_img, text_style_img, stroke_expans
     art_rgb = artwork_img.convert("RGB")
     style_rgb = text_style_img.convert("RGB")
     
-    # Match resolution to style image
+    # Normalize sizes
     style_rgb = resize_image(style_rgb, MAX_SIZE)
     w, h = style_rgb.size
     art_rgb = art_rgb.resize((w, h), Image.Resampling.LANCZOS)
     
-    # Extract mask of hand-written text strokes
-    stroke_mask = extract_handwritten_mask(style_rgb)
+    # Extract clean stroke mask without background noise
+    stroke_mask = clean_paper_shadows_and_extract_mask(style_rgb)
     
     if stroke_expansion > 0:
         k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (stroke_expansion * 2 + 1, stroke_expansion * 2 + 1))
@@ -101,7 +93,7 @@ def composite_artwork_into_text_style(artwork_img, text_style_img, stroke_expans
     rgba_arr = np.dstack((art_arr, stroke_mask))
     composited = Image.fromarray(rgba_arr, "RGBA")
     
-    # Crop to bounding box of content
+    # Crop tightly to extracted text content
     bbox = composited.getbbox()
     if bbox:
         composited = composited.crop(bbox)
@@ -177,7 +169,7 @@ st.header("Step 3: Render Composited Artwork & 3D Merch Preview")
 
 col_opt1, col_opt2 = st.columns(2)
 with col_opt1:
-    stroke_expand = st.slider("Thicken Letter Strokes:", 0, 10, 2)
+    stroke_expand = st.slider("Thicken Letter Strokes:", 0, 10, 1)
 with col_opt2:
     mockup_choice = st.selectbox("Select 3D Merchandise Mockup:", ["Men's Classic Crew Neck T-Shirt", "Boutique Tote Bag"])
 
@@ -185,14 +177,13 @@ if st.button("🚀 Fill Artwork into Handwritten Text Style", type="primary", us
     if not art_file or not style_file:
         st.warning("Please upload BOTH Slot 1 (Artwork) and Slot 2 (Text Style) images.")
     else:
-        with st.spinner("Processing mask extraction and clipping artwork pattern..."):
+        with st.spinner("Filtering paper shadows and clipping artwork pattern into crisp ink strokes..."):
             art_img = Image.open(art_file)
             art_img = ImageOps.exif_transpose(art_img)
             
             style_img = Image.open(style_file)
             style_img = ImageOps.exif_transpose(style_img)
 
-            # Core compositing step
             composited_result = composite_artwork_into_text_style(
                 artwork_img=art_img,
                 text_style_img=style_img,
@@ -203,7 +194,7 @@ if st.button("🚀 Fill Artwork into Handwritten Text Style", type="primary", us
 
             res_col1, res_col2 = st.columns(2)
             with res_col1:
-                st.subheader("🖼️ Artwork Filled into Hand-Drawn Text Style")
+                st.subheader("🖼️ Clean Artwork Filled into Hand-Drawn Text Style")
                 st.image(composited_result, use_container_width=True)
             with res_col2:
                 st.subheader(f"👕 Live 3D {mockup_choice} Mockup")
