@@ -1,7 +1,5 @@
 import io
 import os
-import random
-import math
 import cv2
 import numpy as np
 import streamlit as st
@@ -10,42 +8,60 @@ from PIL import (
     ImageDraw,
     ImageFont,
     ImageFilter,
-    ImageOps,
-    ImageEnhance
+    ImageOps
 )
 
-# Page Configuration
 st.set_page_config(
-    page_title="Hand-Drawn Artwork FX Studio",
-    page_icon="🎨",
+    page_title="Drawing-to-Calligraphy Generator",
+    page_icon="✍️",
     layout="wide"
 )
 
 MAX_SIZE = 1800
 
 # ============================================================
-# FONT HELPER
+# FONT HELPER WITH SYSTEM SEARCH & LIVE PREVIEW DATA
 # ============================================================
 
-def get_font(size, bold=True):
-    font_names = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf"
+def get_available_fonts():
+    """Scans common system paths for heavy, bold, display fonts."""
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+        "C:/Windows/Fonts/impact.ttf",
+        "C:/Windows/Fonts/ariblk.ttf",
+        "C:/Windows/Fonts/coopbl.ttf",
+        "C:/Windows/Fonts/arialbd.ttf"
     ]
-    for font_path in font_names:
-        if os.path.exists(font_path):
-            try:
-                return ImageFont.truetype(font_path, size=size)
-            except Exception:
-                pass
+    
+    valid_fonts = {}
+    for path in font_paths:
+        if os.path.exists(path):
+            name = os.path.basename(path).split(".")[0].upper().replace("-", " ")
+            valid_fonts[f"Extra Bold - {name}"] = path
+            
+    if not valid_fonts:
+        valid_fonts["Default System Bold"] = None
+        
+    return valid_fonts
+
+AVAILABLE_FONTS = get_available_fonts()
+
+def load_custom_font(font_path, size):
+    """Loads font at specified size with fallback."""
+    if font_path and os.path.exists(font_path):
+        try:
+            return ImageFont.truetype(font_path, size=size)
+        except Exception:
+            pass
     try:
         return ImageFont.load_default(size=size)
     except Exception:
         return ImageFont.load_default()
 
 # ============================================================
-# BACKGROUND REMOVAL & EXTRACTION ALGORITHM
+# BACKGROUND REMOVAL & ISOLATION
 # ============================================================
 
 def resize_image(img, max_size=MAX_SIZE):
@@ -123,239 +139,276 @@ def create_transparent_drawing(img):
     return padded
 
 # ============================================================
-# CUTE FX ENGINES
+# ADVANCED TYPOGRAPHY COMPOSITOR
 # ============================================================
 
-def apply_sticker_outline(img: Image.Image, border_color=(255, 255, 255), border_size=12) -> Image.Image:
-    """Creates a cute die-cut vinyl sticker effect with a thick white outline."""
-    alpha = img.getchannel("A")
-    dilated_alpha = alpha.filter(ImageFilter.MaxFilter(border_size * 2 + 1))
+def process_image_portion(source_img, crop_pct_x, crop_pct_y, zoom_level):
+    """Crops and scales specific region of drawing for filling a letter."""
+    w, h = source_img.size
+    crop_w = int(w / zoom_level)
+    crop_h = int(h / zoom_level)
     
-    # Create sticker background layer
-    sticker_bg = Image.new("RGBA", img.size, border_color + (0,))
-    sticker_bg.putalpha(dilated_alpha)
+    start_x = int((w - crop_w) * (crop_pct_x / 100.0))
+    start_y = int((h - crop_h) * (crop_pct_y / 100.0))
+    
+    cropped = source_img.crop((start_x, start_y, start_x + crop_w, start_y + crop_h))
+    return cropped
 
-    # Shadow for sticker
-    shadow_alpha = dilated_alpha.filter(ImageFilter.GaussianBlur(8))
-    shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    shadow.putalpha(shadow_alpha.point(lambda p: int(p * 0.3)))
+def render_thick_stroke_text_mask(letter, font, stroke_expand=0):
+    """Generates letter alpha mask with artificial stroke thickness expansion."""
+    dummy = Image.new("RGBA", (1, 1))
+    draw = ImageDraw.Draw(dummy)
+    bbox = draw.textbbox((0, 0), letter, font=font)
     
-    output = Image.new("RGBA", (img.width + 20, img.height + 20), (0, 0, 0, 0))
-    output.alpha_composite(shadow, (10, 14))
-    output.alpha_composite(sticker_bg, (10, 10))
-    output.alpha_composite(img, (10, 10))
-    return output
-
-def apply_pastel_watercolor_glow(img: Image.Image, glow_color=(255, 182, 193)) -> Image.Image:
-    """Adds a dreamy pastel watercolor aura around the object."""
-    alpha = img.getchannel("A")
-    glow_alpha = alpha.filter(ImageFilter.GaussianBlur(25))
+    lw = max(10, bbox[2] - bbox[0] + 40 + (stroke_expand * 2))
+    lh = max(10, bbox[3] - bbox[1] + 40 + (stroke_expand * 2))
     
-    glow_layer = Image.new("RGBA", img.size, glow_color + (0,))
-    glow_layer.putalpha(glow_alpha.point(lambda p: int(p * 0.7)))
+    mask = Image.new("L", (lw, lh), 0)
+    mask_draw = ImageDraw.Draw(mask)
     
-    output = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    output.alpha_composite(glow_layer, (0, 0))
-    output.alpha_composite(img, (0, 0))
-    return output
-
-def apply_pencil_sketch(img: Image.Image) -> Image.Image:
-    """Converts image or object to a soft pencil sketch."""
-    rgb = img.convert("RGB")
-    gray = cv2.cvtColor(np.array(rgb), cv2.COLOR_RGB2GRAY)
-    inv_gray = 255 - gray
-    blur = cv2.GaussianBlur(inv_gray, (21, 21), 0)
-    sketch = cv2.divide(gray, 255 - blur, scale=256)
+    # Text positioning
+    tx = 20 + stroke_expand - bbox[0]
+    ty = 20 + stroke_expand - bbox[1]
     
-    sketch_rgb = Image.fromarray(sketch).convert("RGBA")
-    sketch_rgb.putalpha(img.getchannel("A"))
-    return sketch_rgb
-
-def create_text_image_mask(text: str, fill_image: Image.Image, font_size: int = 150) -> Image.Image:
-    """Clips the hand-drawn object/texture into custom rendered text."""
-    font = get_font(font_size, bold=True)
+    mask_draw.text((tx, ty), letter, font=font, fill=255)
     
-    # Measure text box size
-    dummy_img = Image.new("RGBA", (1, 1))
-    dummy_draw = ImageDraw.Draw(dummy_img)
-    bbox = dummy_draw.textbbox((0, 0), text, font=font)
-    tw = max(10, bbox[2] - bbox[0] + 40)
-    th = max(10, bbox[3] - bbox[1] + 40)
-    
-    # Render text mask
-    mask_img = Image.new("L", (tw, th), 0)
-    mask_draw = ImageDraw.Draw(mask_img)
-    mask_draw.text((20, 20), text, font=font, fill=255)
-    
-    # Tile/Resize hand-drawn image inside text
-    tiled_fill = fill_image.resize((tw, th), Image.Resampling.LANCZOS).convert("RGBA")
-    tiled_fill.putalpha(mask_img)
-    return tiled_fill
+    # Expand thickness via dilation
+    if stroke_expand > 0:
+        mask_np = np.array(mask)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (stroke_expand * 2 + 1, stroke_expand * 2 + 1))
+        mask_np = cv2.dilate(mask_np, kernel, iterations=1)
+        mask = Image.fromarray(mask_np)
+        
+    return mask, lw, lh
 
 # ============================================================
 # STREAMLIT UI & WORKFLOW
 # ============================================================
 
-st.title("🎨 Hand-Drawn Object Mixer & FX Studio")
-st.write("Upload photos or hand-drawn sketches, extract distinct objects, mix them onto a dynamic canvas, apply cute FX, or mask your drawings directly inside text!")
+if "drawings" not in st.session_state:
+    st.session_state["drawings"] = []
 
-if "extracted_objects" not in st.session_state:
-    st.session_state["extracted_objects"] = []
+st.title("✍️ Hand-Drawn Drawing to Calligraphy Studio")
+st.write("Convert sketches, doodles, and paintings into high-impact typography with per-letter texture mapping, thick bold fonts, and custom artwork alignment.")
 
-# --- STEP 1: UPLOAD & EXTRACT COMPONENTS ---
-st.header("Step 1: Upload Photos & Extract Components")
+# --- STEP 1: UPLOAD & ISOLATE DRAWINGS ---
+st.header("Step 1: Upload Your Hand-Drawn Artwork")
 
 uploaded_files = st.file_uploader(
-    "Upload Hand-Drawn Sketches or Photos (JPG, PNG):",
+    "Upload Hand-Drawn Photos / Sketches (JPG, PNG, WEBP):",
     type=["jpg", "jpeg", "png", "webp"],
     accept_multiple_files=True
 )
 
-if st.button("✂️ Extract All Objects & Isolate Backgrounds", type="primary"):
+if st.button("✂️ Extract & Prepare Artwork", type="primary"):
     if not uploaded_files:
-        st.warning("Please upload at least one image.")
+        st.warning("Please upload at least one image first.")
     else:
         extracted = []
-        with st.spinner("Extracting objects from backgrounds..."):
-            for f in uploaded_files:
+        with st.spinner("Isolating drawing strokes from backgrounds..."):
+            for idx, f in enumerate(uploaded_files):
                 raw = Image.open(f)
                 raw = ImageOps.exif_transpose(raw).convert("RGB")
                 resized = resize_image(raw, MAX_SIZE)
                 isolated = create_transparent_drawing(resized)
-                extracted.append({"name": f.name, "image": isolated})
-        st.session_state["extracted_objects"] = extracted
-        st.success(f"Isolated {len(extracted)} component(s) successfully!")
+                extracted.append({"id": idx, "name": f.name, "image": isolated})
+        st.session_state["drawings"] = extracted
+        st.success(f"Isolated {len(extracted)} drawing(s) successfully!")
 
-# --- STEP 2: DISPLAY EXTRACTED OBJECTS & FX PRESETS ---
-if st.session_state["extracted_objects"]:
-    st.markdown("---")
-    st.header("Step 2: Component Library & Cute FX Styles")
-    
-    cols = st.columns(min(4, len(st.session_state["extracted_objects"])))
-    processed_objects = []
-
-    for idx, item in enumerate(st.session_state["extracted_objects"]):
+# Show extracted drawing previews
+if st.session_state["drawings"]:
+    cols = st.columns(min(4, len(st.session_state["drawings"])))
+    for idx, item in enumerate(st.session_state["drawings"]):
         with cols[idx % len(cols)]:
-            st.markdown(f"**Component #{idx + 1}** ({item['name']})")
+            st.markdown(f"**Drawing #{idx + 1}**")
             st.image(item["image"], use_container_width=True)
-            
-            fx_choice = st.selectbox(
-                f"Apply Effect to #{idx + 1}:",
-                ["Original Isolated", "Cute Sticker Outline", "Pastel Glow", "Pencil Sketch"],
-                key=f"fx_{idx}"
-            )
-            
-            obj_img = item["image"].copy()
-            if fx_choice == "Cute Sticker Outline":
-                obj_img = apply_sticker_outline(obj_img)
-            elif fx_choice == "Pastel Glow":
-                obj_img = apply_pastel_watercolor_glow(obj_img)
-            elif fx_choice == "Pencil Sketch":
-                obj_img = apply_pencil_sketch(obj_img)
-                
-            processed_objects.append({"idx": idx, "name": f"Object #{idx + 1}", "image": obj_img})
 
-    # --- STEP 3: TEXT INSPIRATION & CLIPPING MASK ---
+    # --- STEP 2: TYPOGRAPHY & FONT SELECTION ---
     st.markdown("---")
-    st.header("Step 3: Text Masking (Incorporate Drawing Inside Words)")
-    
-    enable_text_mask = st.checkbox("Incorporate hand-drawn drawing inside custom Text/Word?")
-    text_masked_img = None
-    
-    if enable_text_mask:
-        tm_col1, tm_col2, tm_col3 = st.columns([2, 2, 1])
-        with tm_col1:
-            custom_text = st.text_input("Text/Word to Display:", "CREATE")
-        with tm_col2:
-            fill_obj_idx = st.selectbox(
-                "Select Drawing/Texture to fill inside text:",
-                options=range(len(processed_objects)),
-                format_func=lambda x: f"Object #{x + 1}"
-            )
-        with tm_col3:
-            font_size = st.slider("Font Size:", 80, 300, 160)
-            
-        if custom_text.strip():
-            text_masked_img = create_text_image_mask(
-                custom_text, 
-                processed_objects[fill_obj_idx]["image"], 
-                font_size=font_size
-            )
-            st.image(text_masked_img, caption="Text Masking Preview", width=400)
+    st.header("Step 2: Phrase & Heavy Display Font Styling")
 
-    # --- STEP 4: CANVAS COMPOSITOR ---
+    col_t1, col_t2 = st.columns([2, 1])
+    with col_t1:
+        phrase = st.text_input("Enter Phrase / Text:", "ARTWORK").upper()
+    with col_t2:
+        selected_font_label = st.selectbox("Select Heavy Font Style:", list(AVAILABLE_FONTS.keys()))
+        selected_font_path = AVAILABLE_FONTS[selected_font_label]
+
+    col_s1, col_s2, col_s3 = st.columns(3)
+    with col_s1:
+        font_size = st.slider("Font Base Size (px):", 120, 500, 220)
+    with col_s2:
+        letter_extra_thickness = st.slider("Add Extra Thickness (Stroke Expand):", 0, 30, 8)
+    with col_s3:
+        letter_spacing = st.slider("Letter Spacing (Gap):", -20, 100, 15)
+
+    # Load Font
+    active_font = load_custom_font(selected_font_path, font_size)
+
+    # Font Style Preview Bar
+    preview_img = Image.new("RGBA", (800, 100), (255, 255, 255, 255))
+    p_draw = ImageDraw.Draw(preview_img)
+    p_draw.text((20, 10), phrase if phrase else "PREVIEW", font=active_font, fill=(20, 20, 20))
+    st.image(preview_img, caption="Font Preview", use_container_width=True)
+
+    # --- STEP 3: MAPPING MODE & PER-LETTER FINE-TUNING ---
     st.markdown("---")
-    st.header("Step 4: Composite & Mix Selected Components")
+    st.header("Step 3: Map Drawings onto Letters")
 
-    canvas_bg_color = st.color_picker("Canvas Background Color:", "#F0F4F8")
-    canvas_w = st.number_input("Canvas Width (px):", 800, 3000, 1200)
-    canvas_h = st.number_input("Canvas Height (px):", 600, 3000, 900)
-
-    selected_indices = st.multiselect(
-        "Select Components to mix onto Canvas:",
-        options=list(range(len(processed_objects))),
-        default=list(range(len(processed_objects))),
-        format_func=lambda x: f"Object #{x + 1}"
+    mapping_mode = st.radio(
+        "Mapping Mode:",
+        ["Entire Sentence (Single continuous drawing spans across whole text)", 
+         "Per-Letter Assignment (Choose specific drawing & crop area for EACH letter)"],
+        horizontal=True
     )
 
-    # Individual Layout Controls for chosen components
-    placements = []
-    if selected_indices:
-        st.subheader("Position & Transform Selected Components")
-        for sel_idx in selected_indices:
-            with st.expander(f"Transform Controls for Object #{sel_idx + 1}", expanded=True):
-                c1, c2, c3, c4 = st.columns(4)
-                with c1:
-                    pos_x = st.slider(f"X Position #{sel_idx + 1}:", 0, canvas_w, 100 + (sel_idx * 120), key=f"x_{sel_idx}")
-                with c2:
-                    pos_y = st.slider(f"Y Position #{sel_idx + 1}:", 0, canvas_h, 100 + (sel_idx * 80), key=f"y_{sel_idx}")
-                with c3:
-                    scale = st.slider(f"Scale #{sel_idx + 1}:", 0.1, 2.0, 0.6, key=f"scale_{sel_idx}")
-                with c4:
-                    rotation = st.slider(f"Rotation #{sel_idx + 1}:", -180, 180, 0, key=f"rot_{sel_idx}")
-                
-                placements.append({
-                    "image": processed_objects[sel_idx]["image"],
-                    "x": pos_x, "y": pos_y, "scale": scale, "rotation": rotation
-                })
+    clean_phrase = [c for c in phrase if c.strip()]
+    letter_configs = {}
 
-    # Render Final Canvas
-    if st.button("🚀 Render Mixed Composition Canvas", type="primary", use_container_width=True):
-        # Base canvas
-        bg_rgb = tuple(int(canvas_bg_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-        canvas = Image.new("RGBA", (canvas_w, canvas_h), bg_rgb + (255,))
+    if mapping_mode.startswith("Per-Letter") and clean_phrase:
+        st.subheader("Fine-Tune Individual Letters")
         
-        # Place Text Mask if active
-        if enable_text_mask and text_masked_img:
-            tx = (canvas_w - text_masked_img.width) // 2
-            ty = int(canvas_h * 0.1)
-            canvas.alpha_composite(text_masked_img, (tx, ty))
+        for idx, char in enumerate(clean_phrase):
+            with st.expander(f"Letter #{idx + 1}: '{char}' Configuration", expanded=(idx == 0)):
+                lc1, lc2, lc3, lc4 = st.columns(4)
+                with lc1:
+                    assigned_drawing_idx = st.selectbox(
+                        f"Drawing for '{char}':",
+                        options=range(len(st.session_state["drawings"])),
+                        format_func=lambda x: f"Drawing #{x + 1}",
+                        key=f"char_draw_{idx}"
+                    )
+                with lc2:
+                    crop_x = st.slider(f"Horizontal Shift % ('{char}'):", 0, 100, 50, key=f"cx_{idx}")
+                with lc3:
+                    crop_y = st.slider(f"Vertical Shift % ('{char}'):", 0, 100, 50, key=f"cy_{idx}")
+                with lc4:
+                    zoom = st.slider(f"Zoom In Level ('{char}'):", 1.0, 4.0, 1.2, key=f"zoom_{idx}")
 
-        # Composite selected objects
-        for p in placements:
-            img = p["image"].copy()
-            
-            # Apply Rotation
-            if p["rotation"] != 0:
-                img = img.rotate(-p["rotation"], expand=True, resample=Image.Resampling.BICUBIC)
-                
-            # Apply Scale
-            nw, nh = max(10, int(img.width * p["scale"])), max(10, int(img.height * p["scale"]))
-            img = img.resize((nw, nh), Image.Resampling.LANCZOS)
-            
-            # Composite onto canvas
-            canvas.alpha_composite(img, (p["x"], p["y"]))
+                letter_configs[idx] = {
+                    "drawing_idx": assigned_drawing_idx,
+                    "crop_x": crop_x,
+                    "crop_y": crop_y,
+                    "zoom": zoom
+                }
+    else:
+        # Sentence-wide configuration
+        st.subheader("Global Sentence Texture Mapping")
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            global_drawing_idx = st.selectbox(
+                "Drawing to span across whole phrase:",
+                options=range(len(st.session_state["drawings"])),
+                format_func=lambda x: f"Drawing #{x + 1}"
+            )
+        with sc2:
+            global_crop_x = st.slider("Horizontal Texture Shift %:", 0, 100, 50)
+        with sc3:
+            global_crop_y = st.slider("Vertical Texture Shift %:", 0, 100, 50)
 
-        st.subheader("🖼️ Final Mixed Artwork Composition")
-        st.image(canvas.convert("RGB"), use_container_width=True)
+    # Outline / Stroke Effects
+    st.subheader("Outline & Background Settings")
+    bc1, bc2, bc3 = st.columns(3)
+    with bc1:
+        enable_outline = st.checkbox("Add Outer Contour Stroke", value=True)
+        outline_color = st.color_picker("Contour Color:", "#000000")
+    with bc2:
+        outline_width = st.slider("Contour Width:", 1, 25, 6) if enable_outline else 0
+    with bc3:
+        bg_color = st.color_picker("Background Color:", "#FFFFFF")
 
-        # Download Result
-        buf = io.BytesIO()
-        canvas.convert("RGB").save(buf, format="PNG")
-        st.download_button(
-            label="📥 Download Mixed High-Res Image (PNG)",
-            data=buf.getvalue(),
-            file_name="mixed_handdrawn_composition.png",
-            mime="image/png",
-            use_container_width=True
-        )
+    # --- STEP 4: COMPOSITE CALLIGRAPHY ---
+    st.markdown("---")
+    if st.button("🚀 Render High-Res Calligraphy Artwork", type="primary", use_container_width=True):
+        if not phrase.strip():
+            st.warning("Please type a phrase first.")
+        else:
+            with st.spinner("Rendering custom calligraphy typography..."):
+                rendered_letters = []
+                total_width = 0
+                max_height = 0
+
+                # Render each letter individually
+                for idx, char in enumerate(phrase):
+                    if char == " ":
+                        space_w = int(font_size * 0.4)
+                        rendered_letters.append({"is_space": True, "width": space_w})
+                        total_width += space_w + letter_spacing
+                        continue
+
+                    # Generate letter mask
+                    mask, lw, lh = render_thick_stroke_text_mask(
+                        char, active_font, stroke_expand=letter_extra_thickness
+                    )
+                    
+                    # Determine source drawing
+                    if mapping_mode.startswith("Per-Letter"):
+                        cfg = letter_configs.get(idx, {"drawing_idx": 0, "crop_x": 50, "crop_y": 50, "zoom": 1.0})
+                        src_img = st.session_state["drawings"][cfg["drawing_idx"]]["image"]
+                        texture_portion = process_image_portion(src_img, cfg["crop_x"], cfg["crop_y"], cfg["zoom"])
+                    else:
+                        src_img = st.session_state["drawings"][global_drawing_idx]["image"]
+                        texture_portion = process_image_portion(src_img, global_crop_x, global_crop_y, 1.0)
+
+                    # Scale portion to letter mask size
+                    texture_resized = texture_portion.resize((lw, lh), Image.Resampling.LANCZOS).convert("RGBA")
+                    
+                    # Apply text mask
+                    letter_tile = Image.new("RGBA", (lw, lh), (0, 0, 0, 0))
+                    letter_tile.paste(texture_resized, (0, 0), mask)
+
+                    # Optional Contour Outline
+                    if enable_outline and outline_width > 0:
+                        outline_mask = np.array(mask)
+                        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (outline_width * 2 + 1, outline_width * 2 + 1))
+                        dilated = cv2.dilate(outline_mask, k, iterations=1)
+                        border_mask = cv2.subtract(dilated, outline_mask)
+                        
+                        rgb_border = tuple(int(outline_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                        stroke_img = Image.new("RGBA", (lw, lh), rgb_border + (255,))
+                        
+                        combined_letter = Image.new("RGBA", (lw, lh), (0, 0, 0, 0))
+                        combined_letter.paste(stroke_img, (0, 0), Image.fromarray(border_mask))
+                        combined_letter.alpha_composite(letter_tile, (0, 0))
+                        letter_tile = combined_letter
+
+                    rendered_letters.append({
+                        "is_space": False,
+                        "image": letter_tile,
+                        "width": lw,
+                        "height": lh
+                    })
+
+                    total_width += lw + letter_spacing
+                    max_height = max(max_height, lh)
+
+                # Assemble onto final canvas
+                canvas_padding = 100
+                canvas_w = total_width + (canvas_padding * 2)
+                canvas_h = max_height + (canvas_padding * 2)
+
+                bg_rgb = tuple(int(bg_color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                final_canvas = Image.new("RGBA", (canvas_w, canvas_h), bg_rgb + (255,))
+
+                curr_x = canvas_padding
+                for item in rendered_letters:
+                    if item["is_space"]:
+                        curr_x += item["width"] + letter_spacing
+                    else:
+                        curr_y = canvas_padding + (max_height - item["height"]) // 2
+                        final_canvas.alpha_composite(item["image"], (curr_x, curr_y))
+                        curr_x += item["width"] + letter_spacing
+
+                st.subheader("🖼️ Generated Calligraphy Result")
+                st.image(final_canvas.convert("RGB"), use_container_width=True)
+
+                # Download File
+                buf = io.BytesIO()
+                final_canvas.convert("RGB").save(buf, format="PNG")
+                st.download_button(
+                    label="📥 Download High-Res Calligraphy (PNG)",
+                    data=buf.getvalue(),
+                    file_name="handdrawn_calligraphy_artwork.png",
+                    mime="image/png",
+                    use_container_width=True
+                )
