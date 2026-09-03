@@ -20,17 +20,18 @@ MAX_SIZE = 1800
 
 FONT_OPTIONS = {
     "Heavy Impact Block": [
-        "C:/Windows/Fonts/impact.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "C:/Windows/Fonts/impact.ttf",
+        "C:/Windows/Fonts/arialbd.ttf"
     ],
     "Classic Sans Bold": [
-        "C:/Windows/Fonts/arialbd.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "C:/Windows/Fonts/arialbd.ttf"
     ],
     "Serif Bold": [
-        "C:/Windows/Fonts/georgiab.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"
+        "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+        "C:/Windows/Fonts/georgiab.ttf"
     ]
 }
 
@@ -45,7 +46,7 @@ def load_bold_font(font_choice, size):
     return ImageFont.load_default()
 
 # ============================================================
-# SOLID TYPED MASK COMPOSITOR
+# COMPOSITING ENGINE
 # ============================================================
 
 def resize_image(img, max_size=MAX_SIZE):
@@ -56,77 +57,60 @@ def resize_image(img, max_size=MAX_SIZE):
     new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
     return img.resize(new_size, Image.Resampling.LANCZOS)
 
-def extract_outer_box_frame_only(gray_img):
-    """Isolates ONLY long outer frame lines while filtering out hand-drawn letter strokes inside."""
-    blurred = cv2.GaussianBlur(gray_img, (5, 5), 0)
-    thresh = cv2.adaptiveThreshold(
-        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV, 21, 12
-    )
-    
-    # Filter for large continuous stroke areas (outer box lines)
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(thresh, connectivity=8)
-    frame_mask = np.zeros_like(thresh)
-    
-    h, w = gray_img.shape
-    for label in range(1, num_labels):
-        area = stats[label, cv2.CC_STAT_AREA]
-        # Only keep large frame components (> 250px area)
-        if area >= 250:
-            frame_mask[labels == label] = 255
-            
-    return frame_mask
-
-def create_solid_typed_typography_mask(canvas_w, canvas_h, lines, font_choice, text_scale_pct, text_angle):
-    """Creates a 100% solid, thick pixel mask for typed letters."""
-    mask_img = Image.new("L", (canvas_w, canvas_h), 0)
+def render_giant_solid_typed_mask(w, h, lines, font_choice, base_font_size, text_angle):
+    """Renders giant, thick, solid typed letters on a blank mask."""
+    mask_img = Image.new("L", (w, h), 0)
     draw = ImageDraw.Draw(mask_img)
 
     active_lines = [l.strip() for l in lines if l.strip()]
     if not active_lines:
         return np.array(mask_img)
 
-    # Automatically scale font size relative to canvas width
-    target_width = int(canvas_w * (text_scale_pct / 100.0))
-    
-    # Find font size where the longest line fits target_width
-    font_size = 40
-    test_font = load_bold_font(font_choice, font_size)
-    longest_line = max(active_lines, key=len)
-    
-    bbox = draw.textbbox((0, 0), longest_line, font=test_font)
-    text_w = bbox[2] - bbox[0]
-    
-    if text_w > 0:
-        font_size = int((target_width / float(text_w)) * font_size)
-        
-    font_obj = load_bold_font(font_choice, font_size)
+    font_obj = load_bold_font(font_choice, base_font_size)
 
-    # Render lines vertically stacked
+    # Calculate positioning for stacked lines
     line_bboxes = [draw.textbbox((0, 0), line, font=font_obj) for line in active_lines]
-    line_heights = [max(20, b[3] - b[1]) for b in line_bboxes]
-    line_spacing = int(font_size * 0.25)
+    line_heights = [max(30, b[3] - b[1]) for b in line_bboxes]
+    line_spacing = int(base_font_size * 0.25)
     
-    total_text_height = sum(line_heights) + (len(active_lines) - 1) * line_spacing
-    start_y = (canvas_h - total_text_height) // 2
+    total_height = sum(line_heights) + (len(active_lines) - 1) * line_spacing
+    start_y = (h - total_height) // 2
 
     for idx, line in enumerate(active_lines):
         bbox = line_bboxes[idx]
         tw = bbox[2] - bbox[0]
-        tx = (canvas_w - tw) // 2 - bbox[0]
+        tx = (w - tw) // 2 - bbox[0]
         ty = start_y - bbox[1]
         
+        # Draw solid thick typed text
         draw.text((tx, ty), line, font=font_obj, fill=255)
         start_y += line_heights[idx] + line_spacing
 
-    # Apply layout rotation angle
+    # Apply angle rotation if needed
     if text_angle != 0:
         mask_img = mask_img.rotate(text_angle, resample=Image.Resampling.BICUBIC, expand=False)
 
     return np.array(mask_img)
 
+def extract_outer_frame_mask(style_rgb_img):
+    """Extracts long outer lines using morphological open/close operations."""
+    arr = np.array(style_rgb_img).astype(np.uint8)
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    thresh = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 21, 12
+    )
+    
+    # Large structural kernel to filter out small handwritten strokes and keep outer frame lines
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    cleaned = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    
+    return cleaned
+
 def composite_artwork_into_typed_design(
-    artwork_img, text_style_img, lines, font_choice, text_scale_pct, text_angle, include_frame
+    artwork_img, text_style_img, lines, font_choice, font_size, text_angle, include_frame
 ):
     art_rgb = artwork_img.convert("RGB")
     style_rgb = text_style_img.convert("RGB")
@@ -135,27 +119,26 @@ def composite_artwork_into_typed_design(
     w, h = style_rgb.size
     art_rgb = art_rgb.resize((w, h), Image.Resampling.LANCZOS)
     
-    # 1. Create solid typed letters mask
-    typed_mask = create_solid_typed_typography_mask(
-        canvas_w=w,
-        canvas_h=h,
+    # 1. Create SOLID TYPED MASK (This guarantees full letter fills)
+    typed_mask = render_giant_solid_typed_mask(
+        w=w,
+        h=h,
         lines=lines,
         font_choice=font_choice,
-        text_scale_pct=text_scale_pct,
+        base_font_size=font_size,
         text_angle=text_angle
     )
 
-    # 2. Merge outer sketch frame if enabled
+    # 2. Add outer frame if selected
     if include_frame:
-        gray = cv2.cvtColor(np.array(style_rgb), cv2.COLOR_RGB2GRAY)
-        frame_mask = extract_outer_box_frame_only(gray)
+        frame_mask = extract_outer_frame_mask(style_rgb)
         final_mask = cv2.bitwise_or(typed_mask, frame_mask)
     else:
         final_mask = typed_mask
 
     final_mask = cv2.GaussianBlur(final_mask, (3, 3), 0)
 
-    # 3. Clip Artwork into solid mask
+    # 3. Clip Slot 1 Artwork Pattern into the solid mask
     art_arr = np.array(art_rgb)
     rgba_arr = np.dstack((art_arr, final_mask))
     composited = Image.fromarray(rgba_arr, "RGBA")
@@ -245,11 +228,11 @@ col_opt1, col_opt2, col_opt3, col_opt4 = st.columns(4)
 with col_opt1:
     font_choice = st.selectbox("Typed Font Style:", list(FONT_OPTIONS.keys()))
 with col_opt2:
-    text_scale_pct = st.slider("Text Width Scale (% of image):", 30, 90, 65)
+    font_size = st.slider("Typed Font Size (px):", 100, 450, 240)
 with col_opt3:
-    text_angle = st.slider("Text Tilt Angle (°):", -45, 45, 12)
+    text_angle = st.slider("Text Tilt Angle (°):", -45, 45, -10)
 with col_opt4:
-    include_frame = st.checkbox("Include Hand-Drawn Outer Frame", value=True)
+    include_frame = st.checkbox("Include Outer Frame", value=False)
 
 mockup_choice = st.selectbox("Select 3D Merchandise Mockup:", ["Men's Classic Crew Neck T-Shirt", "Boutique Tote Bag"])
 
@@ -269,7 +252,7 @@ if st.button("🚀 Render Solid Typed Artwork Design", type="primary", use_conta
                 text_style_img=style_img,
                 lines=[line1, line2, line3],
                 font_choice=font_choice,
-                text_scale_pct=text_scale_pct,
+                font_size=font_size,
                 text_angle=text_angle,
                 include_frame=include_frame
             )
