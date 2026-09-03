@@ -15,7 +15,7 @@ from PIL import (
 
 # Page configuration
 st.set_page_config(
-    page_title="Commercial Typography & 3D Merch Studio",
+    page_title="Commercial Typography & Multi-Font Studio",
     page_icon="🛍️",
     layout="wide"
 )
@@ -287,7 +287,6 @@ def render_letter_mask(letter, font, stroke_expand=0):
     return mask, lw, lh
 
 def generate_font_style_preview(phrase_text, font_obj):
-    """Generates a instant live preview box of the chosen font style."""
     sample_text = phrase_text if phrase_text.strip() else "PREVIEW STYLE"
     dummy = Image.new("RGBA", (1, 1))
     draw = ImageDraw.Draw(dummy)
@@ -298,12 +297,9 @@ def generate_font_style_preview(phrase_text, font_obj):
     
     preview_img = Image.new("RGBA", (tw, th), (250, 250, 252, 255))
     p_draw = ImageDraw.Draw(preview_img)
-    
-    # Border frame
     p_draw.rectangle((0, 0, tw-1, th-1), outline=(200, 205, 215), width=2)
     tx = (tw - (bbox[2] - bbox[0])) // 2 - bbox[0]
     ty = (th - (bbox[3] - bbox[1])) // 2 - bbox[1]
-    
     p_draw.text((tx, ty), sample_text, font=font_obj, fill=(20, 25, 35))
     return preview_img
 
@@ -394,7 +390,6 @@ def render_typography_artwork(phrase, font, drawings, mapping_mode, letter_confi
     return final_canvas, rendered_letters
 
 def generate_3d_product_mockup(artwork: Image.Image, apparel_style: str) -> Image.Image:
-    """Renders textured 3D apparel mockups with dynamic shading and realistic folds."""
     mockup = Image.new("RGBA", (1200, 1200), (238, 240, 245, 255))
     draw = ImageDraw.Draw(mockup)
 
@@ -475,7 +470,7 @@ def generate_3d_product_mockup(artwork: Image.Image, apparel_style: str) -> Imag
 if "drawings" not in st.session_state:
     st.session_state["drawings"] = []
 
-st.title("🛍️ Commercial Typography & 3D Merch Studio")
+st.title("🛍️ Commercial Typography & Multi-Font Studio")
 st.write("Convert hand drawings into commercial nursery prints, apparel typography, wedding monograms, and digital Etsy asset packs.")
 
 # --- STEP 1: UPLOAD & ISOLATE DRAWINGS ---
@@ -509,16 +504,37 @@ if st.session_state["drawings"]:
             st.markdown(f"**Drawing #{idx + 1}**")
             st.image(item["image"], use_container_width=True)
 
-    # --- STEP 2: PHRASE & LIVE FONT PREVIEW ---
+    # --- STEP 2: PHRASE & FONT GENERATION MODE ---
     st.markdown("---")
-    st.header("Step 2: Choose Typography Phrase & Font Style")
+    st.header("Step 2: Choose Phrase & Font Output Mode")
 
     col_t1, col_t2 = st.columns([2, 1])
     with col_t1:
         phrase = st.text_input("Enter Text / Phrase:", "CREATIVE").upper()
     with col_t2:
-        selected_font_label = st.selectbox("Select Font Style (30+ Options Available):", list(FONT_STYLES.keys()))
-        selected_font_path = FONT_STYLES[selected_font_label]
+        font_generation_mode = st.radio(
+            "Font Generation Selection:",
+            ["Single Specific Font", "Batch Render Multiple Fonts At Once"],
+            horizontal=True
+        )
+
+    all_font_labels = list(FONT_STYLES.keys())
+
+    if font_generation_mode == "Single Specific Font":
+        selected_fonts = [st.selectbox("Select Primary Font Style:", all_font_labels)]
+    else:
+        num_fonts_option = st.selectbox(
+            "How many font variations to generate?",
+            ["Top 5 Fonts", "Top 10 Fonts", "Top 20 Fonts", "ALL Available Fonts (30+)"]
+        )
+        if num_fonts_option == "Top 5 Fonts":
+            selected_fonts = all_font_labels[:5]
+        elif num_fonts_option == "Top 10 Fonts":
+            selected_fonts = all_font_labels[:10]
+        elif num_fonts_option == "Top 20 Fonts":
+            selected_fonts = all_font_labels[:20]
+        else:
+            selected_fonts = all_font_labels
 
     col_s1, col_s2, col_s3 = st.columns(3)
     with col_s1:
@@ -528,12 +544,13 @@ if st.session_state["drawings"]:
     with col_s3:
         letter_spacing = st.slider("Letter Spacing (Gap):", -20, 100, 15)
 
-    active_font = load_custom_font(selected_font_path, font_size)
+    primary_font_path = FONT_STYLES[selected_fonts[0]]
+    primary_font = load_custom_font(primary_font_path, font_size)
 
     # --- LIVE FONT PREVIEW DISPLAY ---
     st.subheader("🔤 Live Font Style Preview")
-    font_preview_img = generate_font_style_preview(phrase, active_font)
-    st.image(font_preview_img, caption=f"Font Style Preview: {selected_font_label}", use_container_width=True)
+    font_preview_img = generate_font_style_preview(phrase, primary_font)
+    st.image(font_preview_img, caption=f"Primary Font Style Preview: {selected_fonts[0]}", use_container_width=True)
 
     # --- STEP 3: ARTWORK MAPPING & LIVE LETTER PREVIEWS ---
     st.markdown("---")
@@ -576,8 +593,8 @@ if st.session_state["drawings"]:
                     "zoom": zoom
                 }
 
-                # Live Individual Letter Preview
-                mask, lw, lh = render_letter_mask(char, active_font, stroke_expand=stroke_expand)
+                # Live Individual Letter Artwork Preview
+                mask, lw, lh = render_letter_mask(char, primary_font, stroke_expand=stroke_expand)
                 src_img = st.session_state["drawings"][assigned_drawing_idx]["image"]
                 texture_portion = process_image_portion(src_img, crop_x, crop_y, zoom)
                 texture_resized = texture_portion.resize((lw, lh), Image.Resampling.LANCZOS).convert("RGBA")
@@ -598,7 +615,7 @@ if st.session_state["drawings"]:
         with sc3:
             global_cfg["crop_y"] = st.slider("Vertical Texture Shift %:", 0, 100, 50)
 
-    # Style & 3D Mockup Controls
+    # Style Controls
     st.subheader("Professional Styling & 3D Mockup Model")
     fx_col1, fx_col2, fx_col3, fx_col4 = st.columns(4)
     with fx_col1:
@@ -635,39 +652,73 @@ if st.session_state["drawings"]:
         "bg_color": bg_color
     }
 
-    # --- STEP 4: COMPOSITE & EXPORT ---
+    # --- STEP 4: COMPOSITE & BATCH EXPORT ---
     st.markdown("---")
-    st.header("Step 4: Render High-Res Artwork, Individual Letter Assets & 3D Mockup")
+    st.header(f"Step 4: Render Artwork ({len(selected_fonts)} Font(s) Selected)")
     
-    if st.button("🚀 Render High-Res Artwork, Individual Letters & 3D Mockup", type="primary", use_container_width=True):
+    button_label = f"🚀 Render Artwork for {len(selected_fonts)} Font Style(s) & 3D Mockup"
+    if st.button(button_label, type="primary", use_container_width=True):
         if not phrase.strip():
             st.warning("Please enter a text phrase.")
         else:
-            with st.spinner("Rendering artwork, isolating letter assets, and generating 3D mockup..."):
-                final_canvas, letter_items = render_typography_artwork(
-                    phrase=phrase,
-                    font=active_font,
-                    drawings=st.session_state["drawings"],
-                    mapping_mode=mapping_mode,
-                    letter_configs=letter_configs,
-                    global_cfg=global_cfg,
-                    styling=styling_opts
-                )
+            with st.spinner(f"Rendering artwork across {len(selected_fonts)} font style(s)..."):
+                rendered_font_results = {}
+                primary_canvas = None
+                primary_letters = None
 
-                mockup_img = generate_3d_product_mockup(final_canvas, mockup_choice)
+                # Batch render selected font styles
+                for font_label in selected_fonts:
+                    f_path = FONT_STYLES[font_label]
+                    f_obj = load_custom_font(f_path, font_size)
+                    canvas, letters = render_typography_artwork(
+                        phrase=phrase,
+                        font=f_obj,
+                        drawings=st.session_state["drawings"],
+                        mapping_mode=mapping_mode,
+                        letter_configs=letter_configs,
+                        global_cfg=global_cfg,
+                        styling=styling_opts
+                    )
+                    rendered_font_results[font_label] = canvas
+                    if primary_canvas is None:
+                        primary_canvas = canvas
+                        primary_letters = letters
 
-                res_col1, res_col2 = st.columns(2)
-                with res_col1:
-                    st.subheader("🖼️ High-Res Typography Output")
-                    st.image(final_canvas, use_container_width=True)
-                with res_col2:
-                    st.subheader(f"👕 Live 3D {mockup_choice} Mockup")
+                # Generate 3D Mockup using Primary Font
+                mockup_img = generate_3d_product_mockup(primary_canvas, mockup_choice)
+
+                # Output Display
+                if len(selected_fonts) == 1:
+                    res_col1, res_col2 = st.columns(2)
+                    with res_col1:
+                        st.subheader("🖼️ High-Res Typography Output")
+                        st.image(primary_canvas, use_container_width=True)
+                    with res_col2:
+                        st.subheader(f"👕 Live 3D {mockup_choice} Mockup")
+                        st.image(mockup_img, use_container_width=True)
+                else:
+                    st.subheader(f"🖼️ All-Font Output Gallery ({len(rendered_font_results)} Styles)")
+                    grid_cols = st.columns(min(3, len(rendered_font_results)))
+                    for idx, (f_name, f_canvas) in enumerate(rendered_font_results.items()):
+                        with grid_cols[idx % len(grid_cols)]:
+                            st.markdown(f"**Font #{idx + 1}: {f_name}**")
+                            st.image(f_canvas, use_container_width=True)
+
+                    st.subheader(f"👕 Primary Style ({selected_fonts[0]}) on 3D Mockup")
                     st.image(mockup_img, use_container_width=True)
 
-                # Generate Individual Letter Asset ZIP
-                zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                    for idx, item in enumerate(letter_items):
+                # Multi-Font & Letter ZIP Exporters
+                font_zip_buf = io.BytesIO()
+                with zipfile.ZipFile(font_zip_buf, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for f_name, f_canvas in rendered_font_results.items():
+                        b = io.BytesIO()
+                        f_canvas.save(b, format="PNG", dpi=(300, 300))
+                        clean_fname = f_name.replace(" ", "_").replace("/", "_")
+                        zip_file.writestr(f"Fonts/{clean_fname}.png", b.getvalue())
+
+                letter_zip_buf = io.BytesIO()
+                with zipfile.ZipFile(letter_zip_buf, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for idx, item in enumerate(primary_letters):
                         if not item["is_space"]:
                             img_buf = io.BytesIO()
                             item["image"].save(img_buf, format="PNG", dpi=(300, 300))
@@ -678,29 +729,27 @@ if st.session_state["drawings"]:
                 dl_col1, dl_col2, dl_col3 = st.columns(3)
                 with dl_col1:
                     buf1 = io.BytesIO()
-                    final_canvas.save(buf1, format="PNG", dpi=(300, 300))
+                    primary_canvas.save(buf1, format="PNG", dpi=(300, 300))
                     st.download_button(
-                        label="📥 Download Complete Artwork (PNG)",
+                        label="📥 Download Primary Artwork (PNG)",
                         data=buf1.getvalue(),
-                        file_name=f"{phrase}_Typography_Artwork.png",
+                        file_name=f"{phrase}_Primary_Artwork.png",
                         mime="image/png",
                         use_container_width=True
                     )
                 with dl_col2:
                     st.download_button(
-                        label="📦 Download Individual Letters (ZIP Asset Pack)",
-                        data=zip_buffer.getvalue(),
-                        file_name=f"{phrase}_Individual_Letters_Pack.zip",
+                        label=f"📦 Download All {len(selected_fonts)} Font Variations (ZIP)",
+                        data=font_zip_buf.getvalue(),
+                        file_name=f"{phrase}_All_Font_Variations.zip",
                         mime="application/zip",
                         use_container_width=True
                     )
                 with dl_col3:
-                    buf2 = io.BytesIO()
-                    mockup_img.save(buf2, format="PNG")
                     st.download_button(
-                        label=f"📥 Download 3D {mockup_choice} Mockup",
-                        data=buf2.getvalue(),
-                        file_name=f"{phrase}_{mockup_choice}_3D_Mockup.png",
-                        mime="image/png",
+                        label="📦 Download Individual Letters (ZIP Asset Pack)",
+                        data=letter_zip_buf.getvalue(),
+                        file_name=f"{phrase}_Individual_Letters_Pack.zip",
+                        mime="application/zip",
                         use_container_width=True
                     )
