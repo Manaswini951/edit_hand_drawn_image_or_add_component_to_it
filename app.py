@@ -1,5 +1,6 @@
 import io
 import os
+import math
 import cv2
 import numpy as np
 import streamlit as st
@@ -18,9 +19,11 @@ st.set_page_config(
 )
 
 MAX_SIZE = 1800
+AUTO_STRAIGHTEN_DRAWING = True
+MAX_STRAIGHTEN_ANGLE = 18
 
 # ============================================================
-# FONT HELPER WITH SYSTEM SEARCH & LIVE PREVIEW DATA
+# FONT HELPER WITH SYSTEM SEARCH
 # ============================================================
 
 def get_available_fonts():
@@ -61,7 +64,7 @@ def load_custom_font(font_path, size):
         return ImageFont.load_default()
 
 # ============================================================
-# BACKGROUND REMOVAL & ISOLATION
+# EXACT ORIGINAL EXTRACTION PIPELINE (SHADOW-IMMUNE)
 # ============================================================
 
 def resize_image(img, max_size=MAX_SIZE):
@@ -69,74 +72,260 @@ def resize_image(img, max_size=MAX_SIZE):
     if max(w, h) <= max_size:
         return img.copy()
     scale = max_size / float(max(w, h))
-    new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+    new_size = (
+        max(1, int(w * scale)),
+        max(1, int(h * scale))
+    )
     return img.resize(new_size, Image.Resampling.LANCZOS)
+
+def remove_small_components(mask, min_area=18):
+    """Remove isolated noise while preserving genuine drawing details."""
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        mask, connectivity=8
+    )
+
+    if num_labels <= 1:
+        return mask
+
+    cleaned = np.zeros_like(mask)
+
+    for label in range(1, num_labels):
+        area = stats[label, cv2.CC_STAT_AREA]
+        if area >= min_area:
+            cleaned[labels == label] = 255
+
+    return cleaned
 
 def extract_clean_drawing_mask(img_rgb):
     arr = np.array(img_rgb).astype(np.uint8)
     h, w = arr.shape[:2]
+
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
     hsv = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)
     sat = hsv[:, :, 1].astype(np.float32)
 
+    # 1. ESTIMATE THE PAPER / BACKGROUND
     bg_size = max(61, int(min(h, w) * 0.10))
     if bg_size % 2 == 0:
         bg_size += 1
+
     bg_gray = cv2.GaussianBlur(gray, (bg_size, bg_size), 0)
     local_darkness = bg_gray.astype(np.float32) - gray.astype(np.float32)
 
+    # 2. LOCAL COLOR DIFFERENCE
     sat_blur = cv2.GaussianBlur(sat, (35, 35), 0)
     color_difference = np.abs(sat - sat_blur)
-    color_mask = np.where((sat > 38) | (color_difference > 14), 255, 0).astype(np.uint8)
 
+    color_mask = np.where(
+        (sat > 38) | (color_difference > 14),
+        255,
+        0
+    ).astype(np.uint8)
+
+    # 3. BLACK-HAT FOR DARK DRAWING STROKES/FILLS
     bh_size = max(21, int(min(h, w) * 0.035))
     if bh_size % 2 == 0:
         bh_size += 1
-    bh_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bh_size, bh_size))
-    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, bh_kernel)
-    blackhat_mask = np.where(blackhat > 10, 255, 0).astype(np.uint8)
 
+    bh_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (bh_size, bh_size)
+    )
+
+    blackhat = cv2.morphologyEx(
+        gray,
+        cv2.MORPH_BLACKHAT,
+        bh_kernel
+    )
+
+    blackhat_mask = np.where(
+        blackhat > 10,
+        255,
+        0
+    ).astype(np.uint8)
+
+    # 4. LOCAL GRADIENT / STRUCTURE
     grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
     grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
     magnitude = cv2.magnitude(grad_x, grad_y)
-    edge_mask = np.where(magnitude > 24.0, 255, 0).astype(np.uint8)
 
-    relative_dark_mask = np.where(local_darkness > 13.0, 255, 0).astype(np.uint8)
+    edge_mask = np.where(
+        magnitude > 24.0,
+        255,
+        0
+    ).astype(np.uint8)
 
+    # 5. DARK DRAWING SIGNAL -- RELATIVE TO PAPER
+    relative_dark_mask = np.where(
+        local_darkness > 13.0,
+        255,
+        0
+    ).astype(np.uint8)
+
+    strong_relative_dark = np.where(
+        local_darkness > 24.0,
+        255,
+        0
+    ).astype(np.uint8)
+
+    # 6. BUILD INITIAL DRAWING SEEDS
     seeds = cv2.bitwise_or(relative_dark_mask, blackhat_mask)
     seeds = cv2.bitwise_or(seeds, color_mask)
     seeds = cv2.bitwise_or(seeds, edge_mask)
 
+    # 7. PRESERVE VERY DARK ARTWORK WITHOUT BRINGING BACK SHADOWS
     very_dark = np.where(gray < 85, 255, 0).astype(np.uint8)
-    structure_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-    nearby_structure = cv2.dilate(edge_mask, structure_kernel, iterations=1)
-    protected_dark = cv2.bitwise_and(very_dark, nearby_structure)
+
+    structure_kernel_size = max(9, int(min(h, w) * 0.012))
+    if structure_kernel_size % 2 == 0:
+        structure_kernel_size += 1
+
+    structure_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (structure_kernel_size, structure_kernel_size)
+    )
+
+    nearby_structure = cv2.dilate(
+        edge_mask,
+        structure_kernel,
+        iterations=1
+    )
+
+    protected_dark = cv2.bitwise_and(
+        very_dark,
+        nearby_structure
+    )
+
     seeds = cv2.bitwise_or(seeds, protected_dark)
 
-    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    mask = cv2.morphologyEx(seeds, cv2.MORPH_CLOSE, close_kernel, iterations=1)
-    mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+    # 8. FILL REAL DRAWING REGIONS
+    close_size = max(5, int(min(h, w) * 0.008))
+    if close_size % 2 == 0:
+        close_size += 1
+
+    close_kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE,
+        (close_size, close_size)
+    )
+
+    mask = cv2.morphologyEx(
+        seeds,
+        cv2.MORPH_CLOSE,
+        close_kernel,
+        iterations=1
+    )
+
+    mask = cv2.dilate(
+        mask,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+        iterations=1
+    )
+
+    # 9. REMOVE SMOOTH SHADOWS EXPLICITLY
+    local_mean = cv2.GaussianBlur(gray, (31, 31), 0)
+    local_difference = cv2.absdiff(gray, local_mean)
+
+    texture_signal = np.where(
+        local_difference > 7,
+        255,
+        0
+    ).astype(np.uint8)
+
+    smooth_shadow = (
+        (mask > 0) &
+        (texture_signal == 0) &
+        (color_mask == 0) &
+        (strong_relative_dark == 0)
+    )
+
+    mask[smooth_shadow] = 0
+
+    # 10. REMOVE SMALL ISOLATED PAPER SPOTS
+    mask = remove_small_components(mask, min_area=18)
+
+    # 11. CLEAR THE CAMERA FRAME EDGE
+    bw = max(6, int(min(h, w) * 0.004))
+    mask[:bw, :] = 0
+    mask[-bw:, :] = 0
+    mask[:, :bw] = 0
+    mask[:, -bw:] = 0
 
     return mask
 
+def straighten_drawing(image):
+    if not AUTO_STRAIGHTEN_DRAWING:
+        return image
+    alpha = np.array(image.getchannel("A"))
+    ys, xs = np.where(alpha > 50)
+    if len(xs) < 100:
+        return image
+    points = np.column_stack((xs, ys)).astype(np.float32)
+    try:
+        _, eigenvectors = cv2.PCACompute(points, mean=None)
+        vector = eigenvectors[0]
+        angle = math.degrees(math.atan2(vector[1], vector[0]))
+        bbox_w = xs.max() - xs.min()
+        bbox_h = ys.max() - ys.min()
+        if bbox_h >= bbox_w:
+            correction = (90 - angle) if angle > 0 else (-90 - angle)
+        else:
+            correction = -angle
+
+        while correction > 90:
+            correction -= 180
+        while correction < -90:
+            correction += 180
+
+        if abs(correction) <= MAX_STRAIGHTEN_ANGLE:
+            image = image.rotate(
+                correction,
+                resample=Image.Resampling.BICUBIC,
+                expand=True
+            )
+    except Exception:
+        pass
+    return image
+
 def create_transparent_drawing(img):
     original_rgb = img.convert("RGB")
+
+    # Extract drawing mask using exact algorithm
     mask = extract_clean_drawing_mask(original_rgb)
+
+    # Secondary component cleanup pass
+    mask = remove_small_components(mask, min_area=18)
+
+    # Edge softening
     mask = cv2.GaussianBlur(mask, (3, 3), 0)
+
+    # Clear lingering low-contrast artifacts
     mask[mask < 18] = 0
 
     orig_arr = np.array(original_rgb)
+
+    # Reconstruct RGBA without altering photographed RGB colors
     rgba_arr = np.dstack((orig_arr, mask))
     result = Image.fromarray(rgba_arr, "RGBA")
 
+    # Crop tight bounding box
     bbox = result.getbbox()
     if bbox:
         result = result.crop(bbox)
 
-    padding = 20
-    padded = Image.new("RGBA", (result.width + padding * 2, result.height + padding * 2), (0, 0, 0, 0))
+    # Transparent padding frame
+    padding = 40
+    padded = Image.new(
+        "RGBA",
+        (result.width + padding * 2, result.height + padding * 2),
+        (0, 0, 0, 0)
+    )
     padded.alpha_composite(result, (padding, padding))
-    return padded
+    result = padded
+
+    # Auto-straighten orientation
+    result = straighten_drawing(result)
+
+    return result
 
 # ============================================================
 # ADVANCED TYPOGRAPHY COMPOSITOR
@@ -205,7 +394,7 @@ if st.button("✂️ Extract & Prepare Artwork", type="primary"):
         st.warning("Please upload at least one image first.")
     else:
         extracted = []
-        with st.spinner("Isolating drawing strokes from backgrounds..."):
+        with st.spinner("Isolating drawing strokes using original shadow-immune algorithm..."):
             for idx, f in enumerate(uploaded_files):
                 raw = Image.open(f)
                 raw = ImageOps.exif_transpose(raw).convert("RGB")
