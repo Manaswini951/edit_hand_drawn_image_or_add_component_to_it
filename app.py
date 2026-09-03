@@ -3,7 +3,7 @@ import os
 import cv2
 import numpy as np
 import streamlit as st
-from PIL import Image, ImageOps
+from PIL import Image, ImageDraw, ImageOps
 
 # Page configuration
 st.set_page_config(
