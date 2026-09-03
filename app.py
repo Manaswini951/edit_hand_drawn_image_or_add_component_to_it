@@ -3,6 +3,7 @@ import os
 import math
 import zipfile
 import urllib.request
+import cv2
 import numpy as np
 import streamlit as st
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
