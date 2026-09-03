@@ -1,13 +1,22 @@
 import io
 import os
+import math
 import cv2
 import numpy as np
 import streamlit as st
-from PIL import Image, ImageDraw, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+# Attempt importing EasyOCR; fall back to bounding box heuristic if not installed
+try:
+    import easyocr
+    READER = easyocr.Reader(['en'], gpu=False)
+    HAS_OCR = True
+except Exception:
+    HAS_OCR = False
 
 # Page configuration
 st.set_page_config(
-    page_title="Dual-Slot Custom Lettering Studio",
+    page_title="Handwriting-to-Font Artwork Studio",
     page_icon="🎨",
     layout="wide"
 )
@@ -15,7 +24,27 @@ st.set_page_config(
 MAX_SIZE = 1800
 
 # ============================================================
-# HOLE-FILLING & SOLID LETTER EXTRACTION ENGINE
+# RELIABLE FONT LOADING ENGINE
+# ============================================================
+
+def load_bold_digital_font(size):
+    """Loads a thick TrueType font to ensure solid artwork fills."""
+    paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "C:/Windows/Fonts/impact.ttf",
+        "C:/Windows/Fonts/arialbd.ttf"
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size=size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
+
+# ============================================================
+# OCR & BOUNDING-BOX LAYOUT EXTRACTION
 # ============================================================
 
 def resize_image(img, max_size=MAX_SIZE):
@@ -26,89 +55,113 @@ def resize_image(img, max_size=MAX_SIZE):
     new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
     return img.resize(new_size, Image.Resampling.LANCZOS)
 
-def extract_solid_letter_mask(img_rgb, fill_insides=True, stroke_expansion=0):
-    """
-    Extracts ink strokes and automatically fills hollow letter interiors 
-    so the artwork pattern fills the entire body of the letters.
-    """
-    arr = np.array(img_rgb).astype(np.uint8)
-    h, w = arr.shape[:2]
-
-    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    
-    # Adaptive thresholding to isolate ink strokes
+def extract_framing_lines_mask(gray_img):
+    """Isolates non-text surroundings like box frames or decorative ribbons."""
+    blurred = cv2.GaussianBlur(gray_img, (5, 5), 0)
     thresh = cv2.adaptiveThreshold(
-        blurred,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV,
-        21,
-        12
+        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV, 21, 12
     )
-    
-    # Remove paper noise particles
+    # Filter out small dots
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(thresh, connectivity=8)
     clean_mask = np.zeros_like(thresh)
-    
     for label in range(1, num_labels):
-        if stats[label, cv2.CC_STAT_AREA] >= 30:
+        if stats[label, cv2.CC_STAT_AREA] >= 40:
             clean_mask[labels == label] = 255
+    return clean_mask
 
-    # Fill hollow letter interiors if enabled
-    if fill_insides:
-        # Find external contours of letters/boxes
-        contours, hierarchy = cv2.findContours(clean_mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-        
-        filled_mask = np.zeros_like(clean_mask)
-        for i, cnt in enumerate(contours):
-            area = cv2.contourArea(cnt)
-            # Only fill internal holes of letters (filtering out giant bounding frame holes)
-            if area > 15 and area < (w * h * 0.20):
-                cv2.drawContours(filled_mask, [cnt], -1, 255, thickness=cv2.FILLED)
-                
-        # Combine original strokes with filled letter bodies
-        mask = cv2.bitwise_or(clean_mask, filled_mask)
-    else:
-        mask = clean_mask
-
-    # Thicken strokes if requested
-    if stroke_expansion > 0:
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (stroke_expansion * 2 + 1, stroke_expansion * 2 + 1))
-        mask = cv2.dilate(mask, k, iterations=1)
-
-    # Smooth edges
-    mask = cv2.GaussianBlur(mask, (3, 3), 0)
-    return mask
-
-# ============================================================
-# COMPOSITING ENGINE: ARTWORK FILLED INTO TEXT STROKES
-# ============================================================
-
-def composite_artwork_into_text_style(artwork_img, text_style_img, fill_insides=True, stroke_expansion=0):
-    """Clips Upload #1 (Artwork Pattern) inside the solid letter shapes of Upload #2."""
+def convert_sketch_to_digital_font_mask(style_rgb_img, fallback_text="I AM NOT TRASH"):
+    """
+    Detects handwritten text boxes using OCR or contour segmentation, 
+    then renders solid digital typography in those exact positions.
+    """
+    arr = np.array(style_rgb_img).astype(np.uint8)
+    h, w = arr.shape[:2]
+    gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
     
+    # Base canvas for digital text mask
+    digital_text_mask = np.zeros((h, w), dtype=np.uint8)
+    pil_mask = Image.fromarray(digital_text_mask)
+    draw = ImageDraw.Draw(pil_mask)
+
+    text_blocks = []
+
+    # Method 1: EasyOCR Layout Detection
+    if HAS_OCR:
+        try:
+            results = READER.readtext(arr)
+            for (bbox_pts, detected_text, prob) in results:
+                if prob > 0.2:
+                    pts = np.array(bbox_pts, dtype=np.int32)
+                    x_min, y_min = np.min(pts, axis=0)
+                    x_max, y_max = np.max(pts, axis=0)
+                    box_w = x_max - x_min
+                    box_h = y_max - y_min
+                    text_blocks.append({
+                        "text": detected_text.upper(),
+                        "bbox": (x_min, y_min, box_w, box_h)
+                    })
+        except Exception:
+            pass
+
+    # Method 2: Contour Bounding Boxes (Fallback if OCR yields no blocks)
+    if not text_blocks:
+        frame_mask = extract_framing_lines_mask(gray)
+        contours, _ = cv2.findContours(frame_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        words = fallback_text.split()
+        word_idx = 0
+        for cnt in contours:
+            x, y, bw, bh = cv2.boundingRect(cnt)
+            # Filter contours matching text proportions
+            if 30 < bw < (w * 0.7) and 20 < bh < (h * 0.5) and (bw * bh) > 1000:
+                text_val = words[word_idx % len(words)]
+                text_blocks.append({
+                    "text": text_val,
+                    "bbox": (x, y, bw, bh)
+                })
+                word_idx += 1
+
+    # Render Solid Digital Typography inside Detected Regions
+    for block in text_blocks:
+        x, y, bw, bh = block["bbox"]
+        txt = block["text"]
+
+        # Calculate optimal font size to fill the bounding box
+        calc_font_size = max(24, int(bh * 0.85))
+        font_obj = load_bold_digital_font(calc_font_size)
+        
+        # Draw solid digital text into mask
+        draw.text((x + (bw // 2), y + (bh // 2)), txt, font=font_obj, fill=255, anchor="mm")
+
+    # Merge drawn framing boxes/accents into the mask
+    framing_mask = extract_framing_lines_mask(gray)
+    final_combined_mask = cv2.bitwise_or(np.array(pil_mask), framing_mask)
+
+    return final_combined_mask
+
+# ============================================================
+# COMPOSITING ENGINE: ARTWORK FILLED DIGITAL TYPOGRAPHY
+# ============================================================
+
+def composite_artwork_into_digital_typography(artwork_img, text_style_img, fallback_text):
+    """Clips Upload #1 (Artwork Pattern) inside the solid digital typography mask."""
     art_rgb = artwork_img.convert("RGB")
     style_rgb = text_style_img.convert("RGB")
     
-    # Normalize sizes
     style_rgb = resize_image(style_rgb, MAX_SIZE)
     w, h = style_rgb.size
     art_rgb = art_rgb.resize((w, h), Image.Resampling.LANCZOS)
     
-    # Extract mask with filled letter bodies
-    stroke_mask = extract_solid_letter_mask(
-        style_rgb, 
-        fill_insides=fill_insides, 
-        stroke_expansion=stroke_expansion
-    )
+    # Extract digital typography mask
+    solid_mask = convert_sketch_to_digital_font_mask(style_rgb, fallback_text=fallback_text)
+    solid_mask = cv2.GaussianBlur(solid_mask, (3, 3), 0)
     
-    # Clip Artwork into stroke mask
+    # Clip Artwork into solid mask
     art_arr = np.array(art_rgb)
-    rgba_arr = np.dstack((art_arr, stroke_mask))
+    rgba_arr = np.dstack((art_arr, solid_mask))
     composited = Image.fromarray(rgba_arr, "RGBA")
     
-    # Crop tightly to content
     bbox = composited.getbbox()
     if bbox:
         composited = composited.crop(bbox)
@@ -150,8 +203,8 @@ def generate_3d_product_mockup(artwork: Image.Image, apparel_style: str) -> Imag
 # STREAMLIT TWO-SLOT INTERFACE
 # ============================================================
 
-st.title("🎨 Dual-Slot Custom Lettering & Artwork Studio")
-st.write("Upload artwork texture in **Slot 1** and hand-drawn lettering style in **Slot 2**. The app clips the artwork directly inside the strokes!")
+st.title("🎨 Handwriting-to-Font Artwork Studio")
+st.write("Convert handwritten text layouts into **solid digital typography** and fill them end-to-end with your artwork pattern!")
 
 col_upload1, col_upload2 = st.columns(2)
 
@@ -168,7 +221,7 @@ with col_upload1:
         st.image(img1, caption="Uploaded Artwork Pattern", use_container_width=True)
 
 with col_upload2:
-    st.header("Slot 2: Text Style & Layout")
+    st.header("Slot 2: Text Style & Layout Sketch")
     style_file = st.file_uploader(
         "Upload Hand-Drawn Writing Style / Quote Sketch photo (JPG, PNG):",
         type=["jpg", "jpeg", "png", "webp"],
@@ -180,39 +233,36 @@ with col_upload2:
         st.image(img2, caption="Uploaded Writing Style & Layout", use_container_width=True)
 
 st.markdown("---")
-st.header("Step 3: Render Composited Artwork & 3D Merch Preview")
+st.header("Step 3: Render Digital Typography & 3D Merch Preview")
 
-col_opt1, col_opt2, col_opt3 = st.columns(3)
+col_opt1, col_opt2 = st.columns(2)
 with col_opt1:
-    fill_insides = st.checkbox("Solid Fill Inside Letters (Close Hollow Loops)", value=True)
+    fallback_phrase = st.text_input("Verify/Enter Phrase (Fallback Text):", "I AM NOT TRASH").upper()
 with col_opt2:
-    stroke_expand = st.slider("Thicken Letter Strokes:", 0, 10, 2)
-with col_opt3:
     mockup_choice = st.selectbox("Select 3D Merchandise Mockup:", ["Men's Classic Crew Neck T-Shirt", "Boutique Tote Bag"])
 
-if st.button("🚀 Fill Artwork into Handwritten Text Style", type="primary", use_container_width=True):
+if st.button("🚀 Convert Sketch to Digital Font & Fill with Artwork", type="primary", use_container_width=True):
     if not art_file or not style_file:
         st.warning("Please upload BOTH Slot 1 (Artwork) and Slot 2 (Text Style) images.")
     else:
-        with st.spinner("Filling hollow letter interiors and clipping artwork pattern..."):
+        with st.spinner("Extracting handwritten layout, converting to solid digital fonts, and clipping artwork..."):
             art_img = Image.open(art_file)
             art_img = ImageOps.exif_transpose(art_img)
             
             style_img = Image.open(style_file)
             style_img = ImageOps.exif_transpose(style_img)
 
-            composited_result = composite_artwork_into_text_style(
+            composited_result = composite_artwork_into_digital_typography(
                 artwork_img=art_img,
                 text_style_img=style_img,
-                fill_insides=fill_insides,
-                stroke_expansion=stroke_expand
+                fallback_text=fallback_phrase
             )
 
             mockup_img = generate_3d_product_mockup(composited_result, mockup_choice)
 
             res_col1, res_col2 = st.columns(2)
             with res_col1:
-                st.subheader("🖼️ Solid Artwork Filled Lettering")
+                st.subheader("🖼️ Solid Digital Typography Filled with Artwork")
                 st.image(composited_result, use_container_width=True)
             with res_col2:
                 st.subheader(f"👕 Live 3D {mockup_choice} Mockup")
@@ -225,7 +275,7 @@ if st.button("🚀 Fill Artwork into Handwritten Text Style", type="primary", us
                 st.download_button(
                     label="📥 Download Transparent Composited PNG",
                     data=buf1.getvalue(),
-                    file_name="Artwork_Filled_Lettering.png",
+                    file_name="Solid_Digital_Typography_Artwork.png",
                     mime="image/png",
                     use_container_width=True
                 )
