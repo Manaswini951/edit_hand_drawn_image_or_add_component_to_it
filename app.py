@@ -252,7 +252,7 @@ def create_transparent_drawing(img):
     return result
 
 # ============================================================
-# HIGH-END TYPOGRAPHY & 3D VECTOR MOCKUP GENERATORS
+# HIGH-END TYPOGRAPHY & PREVIEW RENDERING ENGINE
 # ============================================================
 
 def process_image_portion(source_img, crop_pct_x, crop_pct_y, zoom_level):
@@ -286,6 +286,27 @@ def render_letter_mask(letter, font, stroke_expand=0):
         
     return mask, lw, lh
 
+def generate_font_style_preview(phrase_text, font_obj):
+    """Generates a instant live preview box of the chosen font style."""
+    sample_text = phrase_text if phrase_text.strip() else "PREVIEW STYLE"
+    dummy = Image.new("RGBA", (1, 1))
+    draw = ImageDraw.Draw(dummy)
+    bbox = draw.textbbox((0, 0), sample_text, font=font_obj)
+    
+    tw = max(200, bbox[2] - bbox[0] + 60)
+    th = max(80, bbox[3] - bbox[1] + 40)
+    
+    preview_img = Image.new("RGBA", (tw, th), (250, 250, 252, 255))
+    p_draw = ImageDraw.Draw(preview_img)
+    
+    # Border frame
+    p_draw.rectangle((0, 0, tw-1, th-1), outline=(200, 205, 215), width=2)
+    tx = (tw - (bbox[2] - bbox[0])) // 2 - bbox[0]
+    ty = (th - (bbox[3] - bbox[1])) // 2 - bbox[1]
+    
+    p_draw.text((tx, ty), sample_text, font=font_obj, fill=(20, 25, 35))
+    return preview_img
+
 def render_typography_artwork(phrase, font, drawings, mapping_mode, letter_configs, global_cfg, styling):
     rendered_letters = []
     total_width = 0
@@ -316,7 +337,7 @@ def render_typography_artwork(phrase, font, drawings, mapping_mode, letter_confi
         letter_tile = Image.new("RGBA", (lw, lh), (0, 0, 0, 0))
         letter_tile.paste(texture_resized, (0, 0), mask)
 
-        # 1. APPLY OUTER CONTOUR STROKE FIRST (Preserves mask dimension alignment)
+        # 1. APPLY CONTOUR STROKE FIRST
         if styling.get("enable_outline") and styling.get("outline_width", 0) > 0:
             out_w = styling["outline_width"]
             outline_mask = np.array(mask)
@@ -381,7 +402,6 @@ def generate_3d_product_mockup(artwork: Image.Image, apparel_style: str) -> Imag
         shirt_pts = [(350, 140), (450, 90), (750, 90), (850, 140), (1050, 310), (940, 460), (870, 410), (870, 1120), (330, 1120), (330, 410), (260, 460), (150, 310)]
         draw.polygon(shirt_pts, fill=(255, 255, 255), outline=(190, 190, 190), width=4)
         draw.arc((500, 70, 700, 170), start=0, end=180, fill=(180, 180, 180), width=5)
-        # 3D Shading
         draw.line((330, 410, 330, 1120), fill=(210, 210, 210, 120), width=15)
         draw.line((870, 410, 870, 1120), fill=(210, 210, 210, 120), width=15)
         
@@ -416,7 +436,6 @@ def generate_3d_product_mockup(artwork: Image.Image, apparel_style: str) -> Imag
     elif apparel_style == "V-Neck T-Shirt":
         shirt_pts = [(350, 140), (450, 90), (750, 90), (850, 140), (1050, 310), (940, 460), (870, 410), (870, 1120), (330, 1120), (330, 410), (260, 460), (150, 310)]
         draw.polygon(shirt_pts, fill=(255, 255, 255), outline=(190, 190, 190), width=4)
-        # Deep V-Neck
         draw.polygon([(480, 90), (600, 280), (720, 90)], outline=(180, 180, 180), fill=(238, 240, 245), width=4)
         
         target_w = 440
@@ -437,10 +456,8 @@ def generate_3d_product_mockup(artwork: Image.Image, apparel_style: str) -> Imag
         mockup.alpha_composite(art_resized, (370, 400))
 
     else: # Tote Bag
-        # Straps
         draw.line((400, 80, 400, 380), fill=(180, 160, 130), width=32)
         draw.line((800, 80, 800, 380), fill=(180, 160, 130), width=32)
-        # Bag Body
         draw.polygon([(240, 380), (960, 380), (910, 1120), (290, 1120)], fill=(248, 244, 230), outline=(190, 180, 160), width=5)
         
         target_w = 500
@@ -492,9 +509,9 @@ if st.session_state["drawings"]:
             st.markdown(f"**Drawing #{idx + 1}**")
             st.image(item["image"], use_container_width=True)
 
-    # --- STEP 2: COMMERCIAL PRESET & 30+ FONT SELECTOR ---
+    # --- STEP 2: PHRASE & LIVE FONT PREVIEW ---
     st.markdown("---")
-    st.header("Step 2: Choose Commercial Preset & Typography Style")
+    st.header("Step 2: Choose Typography Phrase & Font Style")
 
     col_t1, col_t2 = st.columns([2, 1])
     with col_t1:
@@ -513,14 +530,19 @@ if st.session_state["drawings"]:
 
     active_font = load_custom_font(selected_font_path, font_size)
 
-    # --- STEP 3: PER-LETTER MAPPING ---
+    # --- LIVE FONT PREVIEW DISPLAY ---
+    st.subheader("🔤 Live Font Style Preview")
+    font_preview_img = generate_font_style_preview(phrase, active_font)
+    st.image(font_preview_img, caption=f"Font Style Preview: {selected_font_label}", use_container_width=True)
+
+    # --- STEP 3: ARTWORK MAPPING & LIVE LETTER PREVIEWS ---
     st.markdown("---")
     st.header("Step 3: Texture & Letter Mapping")
 
     mapping_mode = st.radio(
-        "Mapping Mode:",
+        "Mapping Options:",
         ["Per-Letter Assignment (Choose drawing & crop region for EACH letter)",
-         "Entire Phrase (Single drawing spans across whole text)"],
+         "Entire Phrase (Single continuous drawing spans across whole text)"],
         horizontal=True
     )
 
@@ -529,9 +551,9 @@ if st.session_state["drawings"]:
     global_cfg = {"drawing_idx": 0, "crop_x": 50, "crop_y": 50}
 
     if mapping_mode.startswith("Per-Letter") and clean_phrase:
-        st.subheader("Fine-Tune Individual Letters")
+        st.subheader("Fine-Tune Individual Letters & Artwork Previews")
         for idx, char in enumerate(clean_phrase):
-            with st.expander(f"Letter #{idx + 1}: '{char}' Configuration", expanded=(idx == 0)):
+            with st.expander(f"Letter #{idx + 1}: '{char}' Configuration & Preview", expanded=(idx == 0)):
                 lc1, lc2, lc3, lc4 = st.columns(4)
                 with lc1:
                     assigned_drawing_idx = st.selectbox(
@@ -553,11 +575,21 @@ if st.session_state["drawings"]:
                     "crop_y": crop_y,
                     "zoom": zoom
                 }
+
+                # Live Individual Letter Preview
+                mask, lw, lh = render_letter_mask(char, active_font, stroke_expand=stroke_expand)
+                src_img = st.session_state["drawings"][assigned_drawing_idx]["image"]
+                texture_portion = process_image_portion(src_img, crop_x, crop_y, zoom)
+                texture_resized = texture_portion.resize((lw, lh), Image.Resampling.LANCZOS).convert("RGBA")
+                letter_preview = Image.new("RGBA", (lw, lh), (255, 255, 255, 255))
+                letter_preview.paste(texture_resized, (0, 0), mask)
+                st.image(letter_preview, caption=f"Live Artwork Preview for Letter '{char}'", width=140)
+
     else:
         sc1, sc2, sc3 = st.columns(3)
         with sc1:
             global_cfg["drawing_idx"] = st.selectbox(
-                "Drawing to span across phrase:",
+                "Drawing to span across whole phrase:",
                 options=range(len(st.session_state["drawings"])),
                 format_func=lambda x: f"Drawing #{x + 1}"
             )
@@ -605,7 +637,7 @@ if st.session_state["drawings"]:
 
     # --- STEP 4: COMPOSITE & EXPORT ---
     st.markdown("---")
-    st.header("Step 4: Render Artwork, Export Individual Letters & 3D Mockups")
+    st.header("Step 4: Render High-Res Artwork, Individual Letter Assets & 3D Mockup")
     
     if st.button("🚀 Render High-Res Artwork, Individual Letters & 3D Mockup", type="primary", use_container_width=True):
         if not phrase.strip():
