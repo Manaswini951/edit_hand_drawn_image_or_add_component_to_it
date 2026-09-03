@@ -1,139 +1,21 @@
 import io
 import os
-import math
-import zipfile
 import cv2
 import numpy as np
 import streamlit as st
-from PIL import (
-    Image,
-    ImageDraw,
-    ImageFont,
-    ImageFilter,
-    ImageOps
-)
+from PIL import Image, ImageOps
 
 # Page configuration
 st.set_page_config(
-    page_title="Commercial Typographic Graphic Studio",
+    page_title="Dual-Slot Custom Lettering Studio",
     page_icon="🎨",
     layout="wide"
 )
 
 MAX_SIZE = 1800
-AUTO_STRAIGHTEN_DRAWING = True
-MAX_STRAIGHTEN_ANGLE = 18
-
-# Local font directory
-FONT_DIR = "./assets/fonts"
-os.makedirs(FONT_DIR, exist_ok=True)
 
 # ============================================================
-# LOCAL FONT MANAGEMENT & RELIABLE LOADING
-# ============================================================
-
-# Define font styles mapped to local files or OS paths
-FONT_CATALOG = {
-    "Cursive Script - Elegant": [
-        os.path.join(FONT_DIR, "script.ttf"),
-        "/usr/share/fonts/truetype/freefont/FreeScript.ttf",
-        "C:/Windows/Fonts/BRUSHSCI.TTF"
-    ],
-    "Bold Display - Impact": [
-        os.path.join(FONT_DIR, "display.ttf"),
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "C:/Windows/Fonts/impact.ttf"
-    ],
-    "Serif - Boutique": [
-        os.path.join(FONT_DIR, "serif.ttf"),
-        "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
-        "C:/Windows/Fonts/georgiab.ttf"
-    ],
-    "Clean Sans - Minimal": [
-        os.path.join(FONT_DIR, "sans.ttf"),
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "C:/Windows/Fonts/arialbd.ttf"
-    ]
-}
-
-def load_reliable_font(style_key, size):
-    """Loads font from local paths; falls back safely to system TrueType fonts."""
-    paths = FONT_CATALOG.get(style_key, [])
-    for p in paths:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size=size)
-            except Exception:
-                pass
-    
-    # Fallback to standard system TTFs
-    system_fallbacks = [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "C:/Windows/Fonts/arialbd.ttf"
-    ]
-    for p in system_fallbacks:
-        if os.path.exists(p):
-            try:
-                return ImageFont.truetype(p, size=size)
-            except Exception:
-                pass
-                
-    return ImageFont.load_default()
-
-# ============================================================
-# DECORATIVE GRAPHIC ACCENTS GENERATOR (Banners, Flourishes, Stars)
-# ============================================================
-
-def draw_ribbon_banner(width, height, fill_color=(0, 0, 0, 255)):
-    """Generates a curved ribbon banner asset."""
-    banner = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(banner)
-    
-    pad = 10
-    w, h = width - pad * 2, height - pad * 2
-    
-    points = [
-        (pad, pad + 15),
-        (pad + w * 0.5, pad),
-        (pad + w, pad + 15),
-        (pad + w - 15, pad + h - 10),
-        (pad + w * 0.5, pad + h),
-        (pad + 15, pad + h - 10)
-    ]
-    draw.polygon(points, fill=fill_color)
-    return banner
-
-def draw_decorative_swash(width, height, fill_color=(0, 0, 0, 255)):
-    """Generates decorative underline flourish loops."""
-    swash = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(swash)
-    
-    mid_y = height // 2
-    draw.arc([10, 5, width // 2, height - 5], start=0, end=180, fill=fill_color, width=6)
-    draw.arc([width // 2 - 10, 5, width - 10, height - 5], start=180, end=360, fill=fill_color, width=6)
-    return swash
-
-def draw_accent_star(size, fill_color=(0, 0, 0, 255)):
-    """Draws a 5-point accent star."""
-    star = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(star)
-    
-    cx, cy = size / 2, size / 2
-    r_outer = size / 2 - 2
-    r_inner = r_outer * 0.4
-    points = []
-    
-    for i in range(10):
-        r = r_outer if i % 2 == 0 else r_inner
-        angle = i * math.pi / 5 - math.pi / 2
-        points.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
-        
-    draw.polygon(points, fill=fill_color)
-    return star
-
-# ============================================================
-# EXACT SHADOW-IMMUNE EXTRACTION ENGINE
+# SHADOW-IMMUNE EXTRACTION ENGINE (Extracts Hand-Drawn Mask)
 # ============================================================
 
 def resize_image(img, max_size=MAX_SIZE):
@@ -157,192 +39,78 @@ def remove_small_components(mask, min_area=18):
             cleaned[labels == label] = 255
     return cleaned
 
-def extract_clean_drawing_mask(img_rgb):
+def extract_handwritten_mask(img_rgb):
+    """Extracts black ink strokes from paper into an alpha mask."""
     arr = np.array(img_rgb).astype(np.uint8)
     h, w = arr.shape[:2]
 
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    hsv = cv2.cvtColor(arr, cv2.COLOR_RGB2HSV)
-    sat = hsv[:, :, 1].astype(np.float32)
-
+    
+    # Gaussian thresholding to isolate ink on paper
     bg_size = max(61, int(min(h, w) * 0.10))
     if bg_size % 2 == 0:
         bg_size += 1
 
     bg_gray = cv2.GaussianBlur(gray, (bg_size, bg_size), 0)
     local_darkness = bg_gray.astype(np.float32) - gray.astype(np.float32)
-
-    sat_blur = cv2.GaussianBlur(sat, (35, 35), 0)
-    color_difference = np.abs(sat - sat_blur)
-    color_mask = np.where((sat > 38) | (color_difference > 14), 255, 0).astype(np.uint8)
-
-    bh_size = max(21, int(min(h, w) * 0.035))
-    if bh_size % 2 == 0:
-        bh_size += 1
-
-    bh_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (bh_size, bh_size))
-    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, bh_kernel)
-    blackhat_mask = np.where(blackhat > 10, 255, 0).astype(np.uint8)
-
+    
+    # Stroke mask
+    mask = np.where(local_darkness > 15.0, 255, 0).astype(np.uint8)
+    
+    # Additional edge detection for thin strokes
     grad_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
     grad_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
     magnitude = cv2.magnitude(grad_x, grad_y)
-    edge_mask = np.where(magnitude > 24.0, 255, 0).astype(np.uint8)
+    edge_mask = np.where(magnitude > 25.0, 255, 0).astype(np.uint8)
 
-    relative_dark_mask = np.where(local_darkness > 13.0, 255, 0).astype(np.uint8)
-    strong_relative_dark = np.where(local_darkness > 24.0, 255, 0).astype(np.uint8)
+    combined_mask = cv2.bitwise_or(mask, edge_mask)
+    
+    # Morphological cleaning
+    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    cleaned_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, close_kernel)
+    cleaned_mask = remove_small_components(cleaned_mask, min_area=25)
+    
+    return cleaned_mask
 
-    seeds = cv2.bitwise_or(relative_dark_mask, blackhat_mask)
-    seeds = cv2.bitwise_or(seeds, color_mask)
-    seeds = cv2.bitwise_or(seeds, edge_mask)
+# ============================================================
+# COMPOSITING ENGINE: ARTWORK FILLED INTO TEXT STROKES
+# ============================================================
 
-    very_dark = np.where(gray < 85, 255, 0).astype(np.uint8)
-    structure_kernel_size = max(9, int(min(h, w) * 0.012))
-    if structure_kernel_size % 2 == 0:
-        structure_kernel_size += 1
-
-    structure_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (structure_kernel_size, structure_kernel_size))
-    nearby_structure = cv2.dilate(edge_mask, structure_kernel, iterations=1)
-    protected_dark = cv2.bitwise_and(very_dark, nearby_structure)
-    seeds = cv2.bitwise_or(seeds, protected_dark)
-
-    close_size = max(5, int(min(h, w) * 0.008))
-    if close_size % 2 == 0:
-        close_size += 1
-
-    close_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size))
-    mask = cv2.morphologyEx(seeds, cv2.MORPH_CLOSE, close_kernel, iterations=1)
-    mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
-
-    local_mean = cv2.GaussianBlur(gray, (31, 31), 0)
-    local_difference = cv2.absdiff(gray, local_mean)
-    texture_signal = np.where(local_difference > 7, 255, 0).astype(np.uint8)
-
-    smooth_shadow = (
-        (mask > 0) &
-        (texture_signal == 0) &
-        (color_mask == 0) &
-        (strong_relative_dark == 0)
-    )
-    mask[smooth_shadow] = 0
-
-    mask = remove_small_components(mask, min_area=18)
-
-    bw = max(6, int(min(h, w) * 0.004))
-    mask[:bw, :] = 0
-    mask[-bw:, :] = 0
-    mask[:, :bw] = 0
-    mask[:, -bw:] = 0
-
-    return mask
-
-def create_transparent_drawing(img):
-    original_rgb = img.convert("RGB")
-    mask = extract_clean_drawing_mask(original_rgb)
-    mask = remove_small_components(mask, min_area=18)
-    mask = cv2.GaussianBlur(mask, (3, 3), 0)
-    mask[mask < 18] = 0
-
-    orig_arr = np.array(original_rgb)
-    rgba_arr = np.dstack((orig_arr, mask))
-    result = Image.fromarray(rgba_arr, "RGBA")
-
-    bbox = result.getbbox()
+def composite_artwork_into_text_style(artwork_img, text_style_img, stroke_expansion=0):
+    """Clips Upload #1 (Artwork Pattern) inside the strokes of Upload #2 (Text Style)."""
+    
+    art_rgb = artwork_img.convert("RGB")
+    style_rgb = text_style_img.convert("RGB")
+    
+    # Match resolution to style image
+    style_rgb = resize_image(style_rgb, MAX_SIZE)
+    w, h = style_rgb.size
+    art_rgb = art_rgb.resize((w, h), Image.Resampling.LANCZOS)
+    
+    # Extract mask of hand-written text strokes
+    stroke_mask = extract_handwritten_mask(style_rgb)
+    
+    if stroke_expansion > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (stroke_expansion * 2 + 1, stroke_expansion * 2 + 1))
+        stroke_mask = cv2.dilate(stroke_mask, k, iterations=1)
+        
+    stroke_mask = cv2.GaussianBlur(stroke_mask, (3, 3), 0)
+    
+    # Clip Artwork into stroke mask
+    art_arr = np.array(art_rgb)
+    rgba_arr = np.dstack((art_arr, stroke_mask))
+    composited = Image.fromarray(rgba_arr, "RGBA")
+    
+    # Crop to bounding box of content
+    bbox = composited.getbbox()
     if bbox:
-        result = result.crop(bbox)
-
+        composited = composited.crop(bbox)
+        
     padding = 40
-    padded = Image.new("RGBA", (result.width + padding * 2, result.height + padding * 2), (0, 0, 0, 0))
-    padded.alpha_composite(result, (padding, padding))
+    padded = Image.new("RGBA", (composited.width + padding * 2, composited.height + padding * 2), (0, 0, 0, 0))
+    padded.alpha_composite(composited, (padding, padding))
+    
     return padded
-
-# ============================================================
-# MULTI-LINE GRAPHIC GRAPHIC COMPOSITOR (Apparel Badge Engine)
-# ============================================================
-
-def render_multi_line_graphic_quote(
-    line1_text, line2_text, line3_text, line4_text,
-    script_font_key, block_font_key,
-    texture_img, styling
-):
-    """Composes multi-line graphic layouts with ribbons, star accents, and mixed font pairings."""
-    canvas_w, canvas_h = 1000, 1200
-    canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-    
-    font_script = load_reliable_font(script_font_key, 180)
-    font_block = load_reliable_font(block_font_key, 160)
-    font_sub = load_reliable_font(block_font_key, 90)
-    
-    y_offset = 100
-    
-    # LINE 1: Cursive Script + Star
-    if line1_text.strip():
-        txt_mask = Image.new("L", (canvas_w, 220), 0)
-        d = ImageDraw.Draw(txt_mask)
-        d.text((canvas_w // 2, 100), line1_text, font=font_script, fill=255, anchor="mm")
-        
-        line1_layer = Image.new("RGBA", (canvas_w, 220), (0, 0, 0, 0))
-        tex_resized = texture_img.resize((canvas_w, 220), Image.Resampling.LANCZOS)
-        line1_layer.paste(tex_resized, (0, 0), txt_mask)
-        
-        # Add Star Accent above line 1
-        star = draw_accent_star(50, fill_color=(40, 40, 40, 255))
-        canvas.alpha_composite(star, (canvas_w // 2 + 180, y_offset - 20))
-        canvas.alpha_composite(line1_layer, (0, y_offset))
-        y_offset += 200
-
-    # LINE 2: Ribbon Banner Subtext
-    if line2_text.strip():
-        banner = draw_ribbon_banner(450, 110, fill_color=(30, 30, 30, 255))
-        b_draw = ImageDraw.Draw(banner)
-        b_draw.text((225, 55), line2_text, font=font_sub, fill=(255, 255, 255, 255), anchor="mm")
-        
-        canvas.alpha_composite(banner, ((canvas_w - 450) // 2, y_offset))
-        y_offset += 140
-
-    # LINE 3: Main Cursive Script + Swash Underline
-    if line3_text.strip():
-        txt_mask = Image.new("L", (canvas_w, 240), 0)
-        d = ImageDraw.Draw(txt_mask)
-        d.text((canvas_w // 2, 100), line3_text, font=font_script, fill=255, anchor="mm")
-        
-        line3_layer = Image.new("RGBA", (canvas_w, 240), (0, 0, 0, 0))
-        tex_resized = texture_img.resize((canvas_w, 240), Image.Resampling.LANCZOS)
-        line3_layer.paste(tex_resized, (0, 0), txt_mask)
-        
-        # Swash underline
-        swash = draw_decorative_swash(400, 60, fill_color=(40, 40, 40, 255))
-        canvas.alpha_composite(swash, ((canvas_w - 400) // 2, y_offset + 170))
-        canvas.alpha_composite(line3_layer, (0, y_offset))
-        y_offset += 250
-
-    # LINE 4: Heavy Bold Display Block
-    if line4_text.strip():
-        txt_mask = Image.new("L", (canvas_w, 240), 0)
-        d = ImageDraw.Draw(txt_mask)
-        d.text((canvas_w // 2, 120), line4_text, font=font_block, fill=255, anchor="mm")
-        
-        line4_layer = Image.new("RGBA", (canvas_w, 240), (0, 0, 0, 0))
-        tex_resized = texture_img.resize((canvas_w, 240), Image.Resampling.LANCZOS)
-        line4_layer.paste(tex_resized, (0, 0), txt_mask)
-        
-        canvas.alpha_composite(line4_layer, (0, y_offset))
-
-    # Apply Contour Outline & Shadow if enabled
-    if styling.get("enable_outline"):
-        out_w = styling.get("outline_width", 4)
-        alpha = np.array(canvas.getchannel("A"))
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (out_w * 2 + 1, out_w * 2 + 1))
-        dilated = cv2.dilate(alpha, k, iterations=1)
-        border_mask = cv2.subtract(dilated, alpha)
-        
-        stroke_img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 255))
-        outlined_canvas = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
-        outlined_canvas.paste(stroke_img, (0, 0), Image.fromarray(border_mask))
-        outlined_canvas.alpha_composite(canvas, (0, 0))
-        canvas = outlined_canvas
-
-    return canvas
 
 def generate_3d_product_mockup(artwork: Image.Image, apparel_style: str) -> Image.Image:
     mockup = Image.new("RGBA", (1200, 1200), (238, 240, 245, 255))
@@ -372,127 +140,87 @@ def generate_3d_product_mockup(artwork: Image.Image, apparel_style: str) -> Imag
     return mockup
 
 # ============================================================
-# STREAMLIT APPLICATION STATE & WORKFLOW
+# STREAMLIT TWO-SLOT INTERFACE
 # ============================================================
 
-if "drawings" not in st.session_state:
-    st.session_state["drawings"] = []
+st.title("🎨 Dual-Slot Custom Lettering & Artwork Studio")
+st.write("Upload artwork texture in **Slot 1** and hand-drawn lettering style in **Slot 2**. The app clips the artwork directly inside the strokes!")
 
-st.title("🎨 Commercial Graphic Typographic Studio")
-st.write("Build multi-line quote graphics with ribbon banners, scripts, and artwork textures.")
+col_upload1, col_upload2 = st.columns(2)
 
-# --- STEP 1: UPLOAD & ISOLATE DRAWINGS ---
-st.header("Step 1: Upload Your Artwork / Texture Image")
+with col_upload1:
+    st.header("Slot 1: Artwork / Pattern Fill")
+    art_file = st.file_uploader(
+        "Upload Artwork / Painting photo (JPG, PNG):",
+        type=["jpg", "jpeg", "png", "webp"],
+        key="slot1_art"
+    )
+    if art_file:
+        img1 = Image.open(art_file)
+        img1 = ImageOps.exif_transpose(img1)
+        st.image(img1, caption="Uploaded Artwork Pattern", use_container_width=True)
 
-uploaded_files = st.file_uploader(
-    "Upload Hand-Drawn Photos / Paintings / Textures (JPG, PNG):",
-    type=["jpg", "jpeg", "png", "webp"],
-    accept_multiple_files=True
-)
+with col_upload2:
+    st.header("Slot 2: Text Style & Layout")
+    style_file = st.file_uploader(
+        "Upload Hand-Drawn Writing Style / Quote Sketch photo (JPG, PNG):",
+        type=["jpg", "jpeg", "png", "webp"],
+        key="slot2_style"
+    )
+    if style_file:
+        img2 = Image.open(style_file)
+        img2 = ImageOps.exif_transpose(img2)
+        st.image(img2, caption="Uploaded Writing Style & Layout", use_container_width=True)
 
-if st.button("✂️ Extract Drawing Strokes", type="primary"):
-    if not uploaded_files:
-        st.warning("Please upload an image first.")
+st.markdown("---")
+st.header("Step 3: Render Composited Artwork & 3D Merch Preview")
+
+col_opt1, col_opt2 = st.columns(2)
+with col_opt1:
+    stroke_expand = st.slider("Thicken Letter Strokes:", 0, 10, 2)
+with col_opt2:
+    mockup_choice = st.selectbox("Select 3D Merchandise Mockup:", ["Men's Classic Crew Neck T-Shirt", "Boutique Tote Bag"])
+
+if st.button("🚀 Fill Artwork into Handwritten Text Style", type="primary", use_container_width=True):
+    if not art_file or not style_file:
+        st.warning("Please upload BOTH Slot 1 (Artwork) and Slot 2 (Text Style) images.")
     else:
-        extracted = []
-        with st.spinner("Extracting drawing strokes..."):
-            for idx, f in enumerate(uploaded_files):
-                raw = Image.open(f)
-                raw = ImageOps.exif_transpose(raw).convert("RGB")
-                resized = resize_image(raw, MAX_SIZE)
-                isolated = create_transparent_drawing(resized)
-                extracted.append({"id": idx, "name": f.name, "image": isolated})
-        st.session_state["drawings"] = extracted
-        st.success(f"Isolated {len(extracted)} artwork texture(s)!")
-
-if st.session_state["drawings"]:
-    cols = st.columns(min(4, len(st.session_state["drawings"])))
-    for idx, item in enumerate(st.session_state["drawings"]):
-        with cols[idx % len(cols)]:
-            st.markdown(f"**Artwork Texture #{idx + 1}**")
-            st.image(item["image"], use_container_width=True)
-
-    # --- STEP 2: MULTI-LINE TEXT ENTRY ---
-    st.markdown("---")
-    st.header("Step 2: Enter Multi-Line Layout Phrase & Font Pairing")
-
-    col_l1, col_l2 = st.columns(2)
-    with col_l1:
-        line1 = st.text_input("Line 1 (Cursive Header):", "this")
-        line2 = st.text_input("Line 2 (Ribbon Subtext):", "IS MY")
-    with col_l2:
-        line3 = st.text_input("Line 3 (Main Cursive Script):", "Writing")
-        line4 = st.text_input("Line 4 (Heavy Block Text):", "SHIRT")
-
-    col_f1, col_f2 = st.columns(2)
-    with col_f1:
-        script_font_choice = st.selectbox("Select Script Font:", list(FONT_CATALOG.keys()), index=0)
-    with col_f2:
-        block_font_choice = st.selectbox("Select Block Font:", list(FONT_CATALOG.keys()), index=1)
-
-    # --- STEP 3: STYLING & MOCKUP OPTIONS ---
-    st.markdown("---")
-    st.header("Step 3: Styling & Merchandise Mockup")
-
-    st1, st2, st3 = st.columns(3)
-    with st1:
-        enable_outline = st.checkbox("Add Contour Stroke", value=True)
-        outline_width = st.slider("Stroke Width:", 1, 15, 5) if enable_outline else 0
-    with st2:
-        mockup_choice = st.selectbox("Select Merchandise Mockup:", ["Men's Classic Crew Neck T-Shirt", "Boutique Tote Bag"])
-    with st3:
-        assigned_texture_idx = st.selectbox(
-            "Select Artwork Texture to Fill Design:",
-            options=range(len(st.session_state["drawings"])),
-            format_func=lambda x: f"Artwork Texture #{x + 1}"
-        )
-
-    styling_opts = {
-        "enable_outline": enable_outline,
-        "outline_width": outline_width
-    }
-
-    # --- STEP 4: COMPOSITE & EXPORT ---
-    st.markdown("---")
-    st.header("Step 4: Render Graphic Design & 3D Mockup")
-
-    if st.button("🚀 Render Graphic Typography Design", type="primary", use_container_width=True):
-        with st.spinner("Compositing graphic layout, ribbon banner, and artwork texture..."):
-            active_texture = st.session_state["drawings"][assigned_texture_idx]["image"]
+        with st.spinner("Processing mask extraction and clipping artwork pattern..."):
+            art_img = Image.open(art_file)
+            art_img = ImageOps.exif_transpose(art_img)
             
-            final_graphic = render_multi_line_graphic_quote(
-                line1_text=line1,
-                line2_text=line2,
-                line3_text=line3,
-                line4_text=line4,
-                script_font_key=script_font_choice,
-                block_font_key=block_font_choice,
-                texture_img=active_texture,
-                styling=styling_opts
+            style_img = Image.open(style_file)
+            style_img = ImageOps.exif_transpose(style_img)
+
+            # Core compositing step
+            composited_result = composite_artwork_into_text_style(
+                artwork_img=art_img,
+                text_style_img=style_img,
+                stroke_expansion=stroke_expand
             )
 
-            mockup_img = generate_3d_product_mockup(final_graphic, mockup_choice)
+            mockup_img = generate_3d_product_mockup(composited_result, mockup_choice)
 
-            res_c1, res_c2 = st.columns(2)
-            with res_c1:
-                st.subheader("🖼️ High-Res Graphic Design Output")
-                st.image(final_graphic, use_container_width=True)
-            with res_c2:
+            res_col1, res_col2 = st.columns(2)
+            with res_col1:
+                st.subheader("🖼️ Artwork Filled into Hand-Drawn Text Style")
+                st.image(composited_result, use_container_width=True)
+            with res_col2:
                 st.subheader(f"👕 Live 3D {mockup_choice} Mockup")
                 st.image(mockup_img, use_container_width=True)
 
-            dl1, dl2 = st.columns(2)
-            with dl1:
+            dl_col1, dl_col2 = st.columns(2)
+            with dl_col1:
                 buf1 = io.BytesIO()
-                final_graphic.save(buf1, format="PNG", dpi=(300, 300))
+                composited_result.save(buf1, format="PNG", dpi=(300, 300))
                 st.download_button(
-                    label="📥 Download Graphic Design PNG",
+                    label="📥 Download Transparent Composited PNG",
                     data=buf1.getvalue(),
-                    file_name="Graphic_Typography_Design.png",
+                    file_name="Artwork_Filled_Lettering.png",
                     mime="image/png",
                     use_container_width=True
                 )
-            with dl2:
+            with dl_col2:
                 buf2 = io.BytesIO()
                 mockup_img.save(buf2, format="PNG")
                 st.download_button(
