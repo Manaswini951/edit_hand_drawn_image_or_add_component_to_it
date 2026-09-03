@@ -15,7 +15,7 @@ st.set_page_config(
 MAX_SIZE = 1800
 
 # ============================================================
-# ACCURATE INK EXTRACTION ENGINE (Fixes Noise/Speckling)
+# HOLE-FILLING & SOLID LETTER EXTRACTION ENGINE
 # ============================================================
 
 def resize_image(img, max_size=MAX_SIZE):
@@ -26,50 +26,67 @@ def resize_image(img, max_size=MAX_SIZE):
     new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
     return img.resize(new_size, Image.Resampling.LANCZOS)
 
-def clean_paper_shadows_and_extract_mask(img_rgb):
+def extract_solid_letter_mask(img_rgb, fill_insides=True, stroke_expansion=0):
     """
-    Extracts black ink strokes cleanly from paper photos while completely 
-    erasing background paper texture and lighting shadows.
+    Extracts ink strokes and automatically fills hollow letter interiors 
+    so the artwork pattern fills the entire body of the letters.
     """
     arr = np.array(img_rgb).astype(np.uint8)
     h, w = arr.shape[:2]
 
     gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
-    
-    # Smooth paper noise
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     
-    # Adaptive thresholding specifically targets crisp ink strokes vs paper
+    # Adaptive thresholding to isolate ink strokes
     thresh = cv2.adaptiveThreshold(
         blurred,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV,
-        21,  # Block size
-        12   # C constant to filter out faint paper shadows
+        21,
+        12
     )
     
-    # Remove isolated speckles/noise dots
+    # Remove paper noise particles
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(thresh, connectivity=8)
-    mask = np.zeros_like(thresh)
+    clean_mask = np.zeros_like(thresh)
     
-    min_stroke_area = 30  # Eliminates small paper dots
     for label in range(1, num_labels):
-        if stats[label, cv2.CC_STAT_AREA] >= min_stroke_area:
-            mask[labels == label] = 255
+        if stats[label, cv2.CC_STAT_AREA] >= 30:
+            clean_mask[labels == label] = 255
 
-    # Connect slightly broken pen strokes
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    
+    # Fill hollow letter interiors if enabled
+    if fill_insides:
+        # Find external contours of letters/boxes
+        contours, hierarchy = cv2.findContours(clean_mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        
+        filled_mask = np.zeros_like(clean_mask)
+        for i, cnt in enumerate(contours):
+            area = cv2.contourArea(cnt)
+            # Only fill internal holes of letters (filtering out giant bounding frame holes)
+            if area > 15 and area < (w * h * 0.20):
+                cv2.drawContours(filled_mask, [cnt], -1, 255, thickness=cv2.FILLED)
+                
+        # Combine original strokes with filled letter bodies
+        mask = cv2.bitwise_or(clean_mask, filled_mask)
+    else:
+        mask = clean_mask
+
+    # Thicken strokes if requested
+    if stroke_expansion > 0:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (stroke_expansion * 2 + 1, stroke_expansion * 2 + 1))
+        mask = cv2.dilate(mask, k, iterations=1)
+
+    # Smooth edges
+    mask = cv2.GaussianBlur(mask, (3, 3), 0)
     return mask
 
 # ============================================================
 # COMPOSITING ENGINE: ARTWORK FILLED INTO TEXT STROKES
 # ============================================================
 
-def composite_artwork_into_text_style(artwork_img, text_style_img, stroke_expansion=0):
-    """Clips Upload #1 (Artwork Pattern) inside the strokes of Upload #2 (Text Style)."""
+def composite_artwork_into_text_style(artwork_img, text_style_img, fill_insides=True, stroke_expansion=0):
+    """Clips Upload #1 (Artwork Pattern) inside the solid letter shapes of Upload #2."""
     
     art_rgb = artwork_img.convert("RGB")
     style_rgb = text_style_img.convert("RGB")
@@ -79,21 +96,19 @@ def composite_artwork_into_text_style(artwork_img, text_style_img, stroke_expans
     w, h = style_rgb.size
     art_rgb = art_rgb.resize((w, h), Image.Resampling.LANCZOS)
     
-    # Extract clean stroke mask without background noise
-    stroke_mask = clean_paper_shadows_and_extract_mask(style_rgb)
-    
-    if stroke_expansion > 0:
-        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (stroke_expansion * 2 + 1, stroke_expansion * 2 + 1))
-        stroke_mask = cv2.dilate(stroke_mask, k, iterations=1)
-        
-    stroke_mask = cv2.GaussianBlur(stroke_mask, (3, 3), 0)
+    # Extract mask with filled letter bodies
+    stroke_mask = extract_solid_letter_mask(
+        style_rgb, 
+        fill_insides=fill_insides, 
+        stroke_expansion=stroke_expansion
+    )
     
     # Clip Artwork into stroke mask
     art_arr = np.array(art_rgb)
     rgba_arr = np.dstack((art_arr, stroke_mask))
     composited = Image.fromarray(rgba_arr, "RGBA")
     
-    # Crop tightly to extracted text content
+    # Crop tightly to content
     bbox = composited.getbbox()
     if bbox:
         composited = composited.crop(bbox)
@@ -167,17 +182,19 @@ with col_upload2:
 st.markdown("---")
 st.header("Step 3: Render Composited Artwork & 3D Merch Preview")
 
-col_opt1, col_opt2 = st.columns(2)
+col_opt1, col_opt2, col_opt3 = st.columns(3)
 with col_opt1:
-    stroke_expand = st.slider("Thicken Letter Strokes:", 0, 10, 1)
+    fill_insides = st.checkbox("Solid Fill Inside Letters (Close Hollow Loops)", value=True)
 with col_opt2:
+    stroke_expand = st.slider("Thicken Letter Strokes:", 0, 10, 2)
+with col_opt3:
     mockup_choice = st.selectbox("Select 3D Merchandise Mockup:", ["Men's Classic Crew Neck T-Shirt", "Boutique Tote Bag"])
 
 if st.button("🚀 Fill Artwork into Handwritten Text Style", type="primary", use_container_width=True):
     if not art_file or not style_file:
         st.warning("Please upload BOTH Slot 1 (Artwork) and Slot 2 (Text Style) images.")
     else:
-        with st.spinner("Filtering paper shadows and clipping artwork pattern into crisp ink strokes..."):
+        with st.spinner("Filling hollow letter interiors and clipping artwork pattern..."):
             art_img = Image.open(art_file)
             art_img = ImageOps.exif_transpose(art_img)
             
@@ -187,6 +204,7 @@ if st.button("🚀 Fill Artwork into Handwritten Text Style", type="primary", us
             composited_result = composite_artwork_into_text_style(
                 artwork_img=art_img,
                 text_style_img=style_img,
+                fill_insides=fill_insides,
                 stroke_expansion=stroke_expand
             )
 
@@ -194,7 +212,7 @@ if st.button("🚀 Fill Artwork into Handwritten Text Style", type="primary", us
 
             res_col1, res_col2 = st.columns(2)
             with res_col1:
-                st.subheader("🖼️ Clean Artwork Filled into Hand-Drawn Text Style")
+                st.subheader("🖼️ Solid Artwork Filled Lettering")
                 st.image(composited_result, use_container_width=True)
             with res_col2:
                 st.subheader(f"👕 Live 3D {mockup_choice} Mockup")
