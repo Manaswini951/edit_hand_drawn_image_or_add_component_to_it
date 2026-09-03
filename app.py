@@ -10,14 +10,13 @@ from PIL import (
     ImageDraw,
     ImageFont,
     ImageFilter,
-    ImageOps,
-    ImageEnhance
+    ImageOps
 )
 
 # Page configuration
 st.set_page_config(
     page_title="Commercial Typography & Custom Merch Studio",
-    page_icon="🎨",
+    page_icon="🛍️",
     layout="wide"
 )
 
@@ -298,21 +297,7 @@ def render_typography_artwork(phrase, font, drawings, mapping_mode, letter_confi
         letter_tile = Image.new("RGBA", (lw, lh), (0, 0, 0, 0))
         letter_tile.paste(texture_resized, (0, 0), mask)
 
-        # Apply Drop Shadow Effect
-        if styling.get("enable_shadow"):
-            shadow_mask = mask.filter(ImageFilter.GaussianBlur(styling.get("shadow_blur", 10)))
-            shadow_tile = Image.new("RGBA", (lw + 20, lh + 20), (0, 0, 0, 0))
-            shadow_color = (0, 0, 0, 140)
-            shadow_img = Image.new("RGBA", (lw, lh), shadow_color)
-            shadow_tile.paste(shadow_img, (10, 10), shadow_mask)
-            
-            combined = Image.new("RGBA", (lw + 20, lh + 20), (0, 0, 0, 0))
-            combined.alpha_composite(shadow_tile)
-            combined.alpha_composite(letter_tile, (0, 0))
-            letter_tile = combined
-            lw, lh = lw + 20, lh + 20
-
-        # Apply Outer Contour Stroke
+        # 1. APPLY OUTER CONTOUR STROKE FIRST (Keeps mask dimensions aligned)
         if styling.get("enable_outline") and styling.get("outline_width", 0) > 0:
             out_w = styling["outline_width"]
             outline_mask = np.array(mask)
@@ -327,6 +312,20 @@ def render_typography_artwork(phrase, font, drawings, mapping_mode, letter_confi
             combined.paste(stroke_img, (0, 0), Image.fromarray(border_mask))
             combined.alpha_composite(letter_tile, (0, 0))
             letter_tile = combined
+
+        # 2. APPLY DROP SHADOW SECOND (Expands canvas safely after stroke)
+        if styling.get("enable_shadow"):
+            shadow_mask = mask.filter(ImageFilter.GaussianBlur(styling.get("shadow_blur", 10)))
+            shadow_tile = Image.new("RGBA", (lw + 20, lh + 20), (0, 0, 0, 0))
+            shadow_color = (0, 0, 0, 140)
+            shadow_img = Image.new("RGBA", (lw, lh), shadow_color)
+            shadow_tile.paste(shadow_img, (10, 10), shadow_mask)
+            
+            combined = Image.new("RGBA", (lw + 20, lh + 20), (0, 0, 0, 0))
+            combined.alpha_composite(shadow_tile)
+            combined.alpha_composite(letter_tile, (0, 0))
+            letter_tile = combined
+            lw, lh = lw + 20, lh + 20
 
         rendered_letters.append({"is_space": False, "image": letter_tile, "width": lw, "height": lh})
         total_width += lw + letter_spacing
@@ -595,7 +594,7 @@ if st.session_state["drawings"]:
                             phrase=char,
                             font=active_font,
                             drawings=st.session_state["drawings"],
-                            mapping_mode="Sentence-wide",
+                            mapping_mode="Entire Phrase",
                             letter_configs={},
                             global_cfg=global_cfg,
                             styling={**styling_opts, "bg_color": "TRANSPARENT"}
